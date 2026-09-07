@@ -5,7 +5,7 @@ loadEnvConfig(process.cwd());
 import { createClient } from '@supabase/supabase-js';
 
 // Evitar hoisting usando require después de cargar el entorno
-const { getPlayerFullData } = require('./lib/riot-api');
+const { getPlayerFullData } = require('../lib/riot-api');
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';

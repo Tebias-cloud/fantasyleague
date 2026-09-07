@@ -1,4 +1,4 @@
-import { getPlayerFullData } from './lib/riot-api';
+import { getPlayerFullData } from '../lib/riot-api';
 import { loadEnvConfig } from '@next/env';
 import * as path from 'path';
 

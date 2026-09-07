@@ -3,9 +3,25 @@
  * Flow: Account-V1 (PUUID) -> Summoner-V4 (SummonerID) -> League-V4 (Rank Info)
  */
 
-const RIOT_API_KEY = process.env.RIOT_API_KEY;
-const REGION = 'americas'; // Regional routing for Account-V1
-const PLATFORM = 'la2';    // Platform routing for Summoner and League (LAS)
+function getRiotApiKey(): string {
+  const key = process.env.RIOT_API_KEY;
+  if (!key) {
+    throw new RiotApiError('RIOT_API_KEY is not defined in environment variables.', 500);
+  }
+  return key;
+}
+
+export class RiotApiError extends Error {
+  status?: number;
+  retryAfter?: number;
+
+  constructor(message: string, status?: number, retryAfter?: number) {
+    super(message);
+    this.name = 'RiotApiError';
+    this.status = status;
+    this.retryAfter = retryAfter;
+  }
+}
 
 export interface LeagueInfo {
   game_name: string;
@@ -19,6 +35,55 @@ export interface LeagueInfo {
   winrate: number;
   current_absolute_lp: number;
   profile_icon_id: number;
+}
+
+interface RiotAccount {
+  puuid: string;
+  gameName: string;
+  tagLine: string;
+}
+
+interface RiotSummoner {
+  profileIconId: number;
+}
+
+interface RiotLeagueEntry {
+  queueType: string;
+  tier: string;
+  rank: string;
+  leaguePoints: number;
+  wins: number;
+  losses: number;
+}
+
+interface RiotMatchParticipant {
+  puuid: string;
+  kills: number;
+  deaths: number;
+  assists: number;
+  totalMinionsKilled: number;
+  neutralMinionsKilled: number;
+  win: boolean;
+  championName: string;
+  item0: number;
+  item1: number;
+  item2: number;
+  item3: number;
+  item4: number;
+  item5: number;
+  item6: number;
+  riotIdGameName?: string;
+  summonerName?: string;
+  riotIdTagline?: string;
+}
+
+interface RiotMatchDetail {
+  info: {
+    gameMode: string;
+    gameCreation: number;
+    gameDuration: number;
+    participants: RiotMatchParticipant[];
+  };
 }
 
 /**
@@ -45,43 +110,75 @@ export function calculateAbsoluteLP(tier: string, division: string, lp: number):
     'I': 300,
   };
 
-  const baseTier = tierValues[tier.toUpperCase()] || 0;
+  const baseTier = tierValues[(tier || '').toUpperCase()] || 0;
   
   // Master+ no tienen divisiones en la API de la misma forma (siempre suelen devolver I o vacio)
-  if (['MASTER', 'GRANDMASTER', 'CHALLENGER'].includes(tier.toUpperCase())) {
+  if (['MASTER', 'GRANDMASTER', 'CHALLENGER'].includes((tier || '').toUpperCase())) {
     return baseTier + lp;
   }
 
-  const baseDivision = divisionValues[division.toUpperCase()] || 0;
+  const baseDivision = divisionValues[(division || '').toUpperCase()] || 0;
   return baseTier + baseDivision + lp;
 }
 
 async function riotFetch<T>(url: string): Promise<T> {
-  if (!RIOT_API_KEY) {
-    throw new Error('RIOT_API_KEY is not defined in environment variables.');
-  }
+  const apiKey = getRiotApiKey();
 
-  const response = await fetch(url, {
-    headers: {
-      'X-Riot-Token': RIOT_API_KEY,
-    },
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
 
-  if (!response.ok) {
-    if (response.status === 404) {
-      throw new Error('NotFound');
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'X-Riot-Token': apiKey,
+      },
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const retryAfterHeader = response.headers.get('Retry-After');
+      const retryAfter = retryAfterHeader ? parseInt(retryAfterHeader, 10) : undefined;
+
+      if (response.status === 400) {
+        throw new RiotApiError('BadRequest', 400);
+      }
+      if (response.status === 401 || response.status === 403) {
+        throw new RiotApiError('Forbidden: API Key might be expired or invalid', response.status);
+      }
+      if (response.status === 404) {
+        throw new RiotApiError('NotFound', 404);
+      }
+      if (response.status === 429) {
+        throw new RiotApiError('RateLimit', 429, retryAfter);
+      }
+      if (response.status >= 500) {
+        throw new RiotApiError('RiotServerError', response.status);
+      }
+      throw new RiotApiError(`Riot API Error: ${response.status}`, response.status);
     }
-    if (response.status === 429) {
-      throw new Error('RateLimit');
-    }
-    throw new Error(`Riot API Error: ${response.status}`);
-  }
 
-  return response.json() as Promise<T>;
+    try {
+      return (await response.json()) as T;
+    } catch {
+      throw new RiotApiError('Invalid JSON response from Riot API', response.status);
+    }
+  } catch (error: unknown) {
+    clearTimeout(timeoutId);
+    if (error instanceof RiotApiError) {
+      throw error;
+    }
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new RiotApiError('Timeout: Riot API request took too long', 408);
+    }
+    const message = error instanceof Error ? error.message : 'Unknown network error';
+    throw new RiotApiError(message);
+  }
 }
 
 export function getRouteByTag(tagLine: string): { region: string; platform: string } {
-  const tag = tagLine.toUpperCase().trim();
+  const tag = (tagLine || '').toUpperCase().trim();
   
   // Default to LAS
   let region = 'americas';
@@ -117,17 +214,17 @@ export async function getPlayerFullData(gameName: string, tagLine: string): Prom
   try {
     // Paso 1: Account-V1 (Obtener PUUID)
     const accountUrl = `https://${region}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(gameName)}/${encodeURIComponent(tagLine)}`;
-    const accountData = await riotFetch<{ puuid: string; gameName: string; tagLine: string }>(accountUrl);
+    const accountData = await riotFetch<RiotAccount>(accountUrl);
     const puuid = accountData.puuid;
 
     // Paso 2: Summoner-V4 (Obtener Profile Icon)
     const summonerUrl = `https://${platform}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/${puuid}`;
-    const summonerData = await riotFetch<{ profileIconId: number }>(summonerUrl);
+    const summonerData = await riotFetch<RiotSummoner>(summonerUrl);
     const profileIconId = summonerData.profileIconId;
 
     // Paso 3: League-V4 (Obtener info de SoloQ por PUUID)
     const leagueUrl = `https://${platform}.api.riotgames.com/lol/league/v4/entries/by-puuid/${puuid}`;
-    const leagueEntries = await riotFetch<any[]>(leagueUrl);
+    const leagueEntries = await riotFetch<RiotLeagueEntry[]>(leagueUrl);
 
     // Buscar SoloQ (RANKED_SOLO_5x5)
     const soloQ = leagueEntries.find((entry) => entry.queueType === 'RANKED_SOLO_5x5');
@@ -151,7 +248,7 @@ export async function getPlayerFullData(gameName: string, tagLine: string): Prom
 
     const wins = soloQ.wins;
     const losses = soloQ.losses;
-    const winrate = Math.round((wins / (wins + losses)) * 100);
+    const winrate = wins + losses > 0 ? Math.round((wins / (wins + losses)) * 100) : 0;
     const absLp = calculateAbsoluteLP(soloQ.tier, soloQ.rank, soloQ.leaguePoints);
 
     return {
@@ -167,8 +264,9 @@ export async function getPlayerFullData(gameName: string, tagLine: string): Prom
       current_absolute_lp: absLp,
       profile_icon_id: profileIconId,
     };
-  } catch (error: any) {
-    console.error(`[Riot API] Error fetching data for ${gameName}#${tagLine}:`, error.message);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[Riot API] Error fetching data for ${gameName}#${tagLine}:`, message);
     throw error;
   }
 }
@@ -207,11 +305,11 @@ export async function getPlayerRecentMatches(puuid: string, tagLine: string = 'L
     const matchPromises = matchIds.map(async (matchId) => {
       try {
         const detailUrl = `https://${region}.api.riotgames.com/lol/match/v5/matches/${matchId}`;
-        const matchDetail = await riotFetch<any>(detailUrl);
+        const matchDetail = await riotFetch<RiotMatchDetail>(detailUrl);
         
         // Buscar el participante que corresponda a nuestro PUUID
         const participant = matchDetail.info.participants.find(
-          (p: any) => p.puuid === puuid
+          (p) => p.puuid === puuid
         );
 
         if (!participant) return null;
@@ -232,7 +330,7 @@ export async function getPlayerRecentMatches(puuid: string, tagLine: string = 'L
           participant.item6
         ];
 
-        const participants: ParticipantMatchInfo[] = matchDetail.info.participants.map((p: any) => ({
+        const participants: ParticipantMatchInfo[] = matchDetail.info.participants.map((p) => ({
           gameName: p.riotIdGameName || p.summonerName || '',
           tagLine: p.riotIdTagline || '',
           championName: p.championName,
@@ -255,16 +353,18 @@ export async function getPlayerRecentMatches(puuid: string, tagLine: string = 'L
           items,
           participants
         };
-      } catch (err) {
-        console.error(`Error fetching match detail for ${matchId}:`, err);
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : 'Unknown error';
+        console.error(`Error fetching match detail for ${matchId}:`, errMsg);
         return null;
       }
     });
 
     const results = await Promise.all(matchPromises);
     return results.filter((m): m is MatchInfo => m !== null);
-  } catch (error: any) {
-    console.error(`[Riot API] Error fetching matches for ${puuid}:`, error.message);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[Riot API] Error fetching matches for ${puuid}:`, message);
     return [];
   }
 }

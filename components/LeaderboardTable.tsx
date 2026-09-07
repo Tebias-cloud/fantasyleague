@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback, memo } from 'react';
+import { useState, useEffect, useCallback, useMemo, memo } from 'react';
 import PlayerChart from './PlayerChart';
 import GlobalChart from './GlobalChart';
 import { RefreshCw, UserPlus, Search, AlertCircle, Loader2, Timer, Award, ExternalLink, Calendar } from 'lucide-react';
 import { addPlayerToLobby, refreshLobbyPlayers, getPlayerMatchesAction } from '@/app/actions/riot-actions';
 import { getLobbyPlayers } from '@/app/actions/lobby-actions';
+import { MatchInfo, ParticipantMatchInfo } from '@/lib/riot-api';
 
 // Caché global en memoria de iconos rotos para evitar parpadeos durante rediseños o renderizados del DOM
 const failedIconsCache = new Set<string>();
@@ -13,19 +14,16 @@ const failedIconsCache = new Set<string>();
 // Componente seguro que memoriza el origen de la imagen y evita parpadeos en re-renders
 const SafeProfileIcon = memo(function SafeProfileIcon({ iconId, alt, className }: { iconId: number; alt: string; className?: string }) {
   const primaryUrl = `https://ddragon.leagueoflegends.com/cdn/14.3.1/img/profileicon/${iconId}.png`;
-  const fallbackUrl = "https://ddragon.leagueoflegends.com/cdn/14.3.1/img/profileicon/0.png";
+  const fallbackUrl = 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/profile-icons/0.jpg';
   
-  const [src, setSrc] = useState(() => failedIconsCache.has(primaryUrl) ? fallbackUrl : primaryUrl);
-
-  useEffect(() => {
-    const currentUrl = `https://ddragon.leagueoflegends.com/cdn/14.3.1/img/profileicon/${iconId}.png`;
-    setSrc(failedIconsCache.has(currentUrl) ? fallbackUrl : currentUrl);
-  }, [iconId]);
+  const [src, setSrc] = useState<string>(() => {
+    return failedIconsCache.has(primaryUrl) ? fallbackUrl : primaryUrl;
+  });
 
   return (
     <img 
-      src={src}
-      alt={alt}
+      src={src} 
+      alt={alt} 
       className={className}
       onError={() => {
         failedIconsCache.add(primaryUrl);
@@ -35,8 +33,30 @@ const SafeProfileIcon = memo(function SafeProfileIcon({ iconId, alt, className }
   );
 });
 
-export default function LeaderboardTable({ lobbyId }: { lobbyId: string }) {
-  const [players, setPlayers] = useState<any[]>([]);
+export interface LeaderboardPlayer {
+  puuid: string;
+  game_name: string;
+  tag_line: string;
+  profile_icon_id: number | null;
+  start_absolute_lp: number;
+  current_absolute_lp: number;
+  delta: number;
+  tier: string;
+  division: string;
+  lp: number;
+  wins: number;
+  losses: number;
+  winrate: number;
+  history: { date: string; lp: number }[];
+}
+
+interface LeaderboardTableProps {
+  lobbyId: string;
+  isOwner?: boolean;
+}
+
+export default function LeaderboardTable({ lobbyId, isOwner = false }: LeaderboardTableProps) {
+  const [players, setPlayers] = useState<LeaderboardPlayer[]>([]);
   const [expandedPlayer, setExpandedPlayer] = useState<string | null>(null);
   
   // States para la carga y refresh
@@ -51,11 +71,12 @@ export default function LeaderboardTable({ lobbyId }: { lobbyId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   // Matches state
-  const [playerMatches, setPlayerMatches] = useState<Record<string, any[]>>({});
+  const [playerMatches, setPlayerMatches] = useState<Record<string, MatchInfo[]>>({});
   const [loadingMatches, setLoadingMatches] = useState<Record<string, boolean>>({});
 
   // Clock state para Corea (o LAS local)
   const [localTime, setLocalTime] = useState('');
+  const [currentTimeMs, setCurrentTimeMs] = useState<number>(() => Date.now());
 
   const fetchPlayers = useCallback(async () => {
     try {
@@ -71,12 +92,31 @@ export default function LeaderboardTable({ lobbyId }: { lobbyId: string }) {
 
   // Cargar datos inicialmente
   useEffect(() => {
-    fetchPlayers();
-  }, [fetchPlayers]);
+    let isMounted = true;
+    getLobbyPlayers(lobbyId)
+      .then((data) => {
+        if (isMounted) {
+          setPlayers(data);
+          setIsLoadingData(false);
+        }
+      })
+      .catch((err) => {
+        if (isMounted) {
+          console.error(err);
+          setError("Error al cargar los jugadores de la sala.");
+          setIsLoadingData(false);
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [lobbyId]);
 
   // Actualizar el reloj cada segundo
   useEffect(() => {
     const updateClock = () => {
+      const now = new Date();
+      setCurrentTimeMs(now.getTime());
       const options: Intl.DateTimeFormatOptions = {
         hour: '2-digit',
         minute: '2-digit',
@@ -85,7 +125,7 @@ export default function LeaderboardTable({ lobbyId }: { lobbyId: string }) {
         day: 'numeric',
         month: 'short',
       };
-      setLocalTime(new Date().toLocaleDateString('es-ES', options));
+      setLocalTime(now.toLocaleDateString('es-ES', options));
     };
     updateClock();
     const interval = setInterval(updateClock, 1000);
@@ -114,7 +154,7 @@ export default function LeaderboardTable({ lobbyId }: { lobbyId: string }) {
         await fetchPlayers();
         setCooldown(120); // 2 minutos de cooldown
       }
-    } catch (err) {
+    } catch {
       setError("Error inesperado al actualizar.");
     } finally {
       setIsRefreshing(false);
@@ -155,19 +195,21 @@ export default function LeaderboardTable({ lobbyId }: { lobbyId: string }) {
         setGameName('');
         setTagLine('');
       }
-    } catch (err) {
+    } catch {
       setError("Error inesperado al añadir jugador.");
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Sort by absolute LP descending
-  const sortedPlayers = [...players].sort((a, b) => b.current_absolute_lp - a.current_absolute_lp);
+  // Sort by absolute LP descending (memoized to avoid re-sorting on every 1s timer tick)
+  const sortedPlayers = useMemo(() => {
+    return [...players].sort((a, b) => b.current_absolute_lp - a.current_absolute_lp);
+  }, [players]);
 
   // Helpers para matches
   const getElapsedTime = (timestamp: number) => {
-    const diff = Date.now() - timestamp;
+    const diff = currentTimeMs - timestamp;
     const mins = Math.floor(diff / 60000);
     const hours = Math.floor(mins / 60);
     const days = Math.floor(hours / 24);
@@ -232,73 +274,81 @@ export default function LeaderboardTable({ lobbyId }: { lobbyId: string }) {
     <div className="w-full max-w-5xl mx-auto space-y-10">
       
       {/* Search Form + Clock (Unificado para ahorrar espacio) */}
-      <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-5 shadow-xl backdrop-blur-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 pb-3 border-b border-slate-800/40">
-          <div className="flex items-center gap-2">
-            <div className="p-1.5 bg-emerald-500/10 rounded-lg">
-              <UserPlus className="w-4 h-4 text-emerald-400" />
+      {isOwner && (
+        <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-5 shadow-xl backdrop-blur-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 pb-3 border-b border-slate-800/40">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 bg-emerald-500/10 rounded-lg">
+                <UserPlus className="w-4 h-4 text-emerald-400" />
+              </div>
+              <h3 className="text-sm font-black text-white tracking-tight uppercase">Añadir Invocador</h3>
             </div>
-            <h3 className="text-sm font-black text-white tracking-tight uppercase">Añadir Invocador</h3>
+            
+            <div className="flex items-center gap-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              <div className="flex items-center gap-1.5">
+                <span className="flex h-1.5 w-1.5 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                </span>
+                <span>Actualizado</span>
+              </div>
+              <span className="text-slate-700">|</span>
+              <div className="flex items-center gap-1 text-slate-400">
+                <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+                <span>{localTime || 'Cargando reloj...'}</span>
+              </div>
+            </div>
           </div>
-          
-          <div className="flex items-center gap-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-            <div className="flex items-center gap-1.5">
-              <span className="flex h-1.5 w-1.5 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
-              </span>
-              <span>Actualizado</span>
+
+          <form onSubmit={handleAddPlayer} className="grid grid-cols-1 md:grid-cols-[1fr_100px_auto] gap-3">
+            <div className="relative group">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-emerald-400 transition-colors" />
+              <input 
+                type="text" 
+                placeholder="Nombre de Invocador (ej. JugadorEjemplo)" 
+                value={gameName}
+                onChange={(e) => setGameName(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 pl-10 pr-3 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/50 transition-all"
+                required
+              />
             </div>
-            <span className="text-slate-700">|</span>
-            <div className="flex items-center gap-1 text-slate-400">
-              <Calendar className="w-3.5 h-3.5 text-emerald-400" />
-              <span>{localTime || 'Cargando reloj...'}</span>
+            <div className="relative group">
+              <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[11px] text-slate-500 font-black group-focus-within:text-emerald-400 transition-colors">#</span>
+              <input 
+                type="text" 
+                placeholder="Tag" 
+                value={tagLine}
+                onChange={(e) => setTagLine(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 pl-7 pr-3 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/50 transition-all uppercase"
+                required
+              />
             </div>
-          </div>
+            <button 
+              type="submit" 
+              disabled={isLoading}
+              className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black uppercase tracking-wider py-2.5 px-6 rounded-xl transition-all disabled:opacity-50 flex items-center justify-center gap-1.5 shadow-[0_0_15px_rgba(16,185,129,0.15)]"
+            >
+              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Añadir'}
+            </button>
+          </form>
+
+          {error && (
+            <div className="mt-3 flex items-center gap-2 text-red-400 text-xs font-bold bg-red-400/5 border border-red-400/10 p-3 rounded-xl animate-in fade-in slide-in-from-top-1">
+              <AlertCircle className="w-4 h-4" />
+              {error}
+            </div>
+          )}
         </div>
+      )}
 
-        <form onSubmit={handleAddPlayer} className="grid grid-cols-1 md:grid-cols-[1fr_100px_auto] gap-3">
-          <div className="relative group">
-            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-emerald-400 transition-colors" />
-            <input 
-              type="text" 
-              placeholder="Nombre de Invocador (ej. Faker)" 
-              value={gameName}
-              onChange={(e) => setGameName(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 pl-10 pr-3 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/50 transition-all"
-              required
-            />
-          </div>
-          <div className="relative group">
-            <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[11px] text-slate-500 font-black group-focus-within:text-emerald-400 transition-colors">#</span>
-            <input 
-              type="text" 
-              placeholder="Tag" 
-              value={tagLine}
-              onChange={(e) => setTagLine(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 pl-7 pr-3 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/50 transition-all uppercase"
-              required
-            />
-          </div>
-          <button 
-            type="submit"
-            disabled={isLoading}
-            className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black uppercase tracking-wider py-2.5 px-6 rounded-xl transition-all disabled:opacity-50 flex items-center justify-center gap-1.5 shadow-[0_0_15px_rgba(16,185,129,0.15)]"
-          >
-            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Añadir'}
-          </button>
-        </form>
-
-        {error && (
-          <div className="mt-3 flex items-center gap-2 text-red-400 text-xs font-bold bg-red-400/5 border border-red-400/10 p-3 rounded-xl animate-in fade-in slide-in-from-top-1">
+      {/* Leaderboard Section */}
+      <div className="space-y-6">
+        {!isOwner && error && (
+          <div className="flex items-center gap-2 text-red-400 text-xs font-bold bg-red-400/5 border border-red-400/10 p-3 rounded-xl animate-in fade-in slide-in-from-top-1">
             <AlertCircle className="w-4 h-4" />
             {error}
           </div>
         )}
-      </div>
-
-      {/* Leaderboard Section */}
-      <div className="space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
           <div>
             <h2 className="text-3xl md:text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white to-slate-400 tracking-tighter uppercase">
@@ -306,34 +356,36 @@ export default function LeaderboardTable({ lobbyId }: { lobbyId: string }) {
             </h2>
             <p className="text-sm font-bold text-slate-500 uppercase tracking-widest mt-1">Clasificación en tiempo real de invocadores</p>
           </div>
-          <div className="flex items-center gap-3">
-            <button 
-              onClick={handleRefresh}
-              disabled={isRefreshing || cooldown > 0}
-              className={`flex items-center gap-2 px-6 py-3 rounded-2xl text-sm font-black uppercase tracking-wider transition-all border shadow-lg
-                ${cooldown > 0 
-                  ? 'bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed shadow-none' 
-                  : 'bg-slate-800 hover:bg-slate-700 text-white border-slate-700 hover:border-slate-600'
-                }`}
-            >
-              {cooldown > 0 ? (
-                <>
-                  <Timer className="w-4 h-4 text-orange-500" />
-                  Espera {Math.floor(cooldown / 60)}:{(cooldown % 60).toString().padStart(2, '0')}
-                </>
-              ) : isRefreshing ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin text-emerald-400" />
-                  Actualizando...
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="w-4 h-4" />
-                  Actualizar
-                </>
-              )}
-            </button>
-          </div>
+          {isOwner && (
+            <div className="flex items-center gap-3">
+              <button 
+                onClick={handleRefresh}
+                disabled={isRefreshing || cooldown > 0}
+                className={`flex items-center gap-2 px-6 py-3 rounded-2xl text-sm font-black uppercase tracking-wider transition-all border shadow-lg
+                  ${cooldown > 0 
+                    ? 'bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed shadow-none' 
+                    : 'bg-slate-800 hover:bg-slate-700 text-white border-slate-700 hover:border-slate-600'
+                  }`}
+              >
+                {cooldown > 0 ? (
+                  <>
+                    <Timer className="w-4 h-4 text-orange-500" />
+                    Espera {Math.floor(cooldown / 60)}:{(cooldown % 60).toString().padStart(2, '0')}
+                  </>
+                ) : isRefreshing ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin text-emerald-400" />
+                    Actualizando...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-4 h-4" />
+                    Actualizar
+                  </>
+                )}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Global Chart */}
@@ -348,7 +400,11 @@ export default function LeaderboardTable({ lobbyId }: { lobbyId: string }) {
           ) : sortedPlayers.length === 0 ? (
             <div className="py-20 text-center bg-slate-900/30 rounded-3xl border border-slate-800/50 backdrop-blur-sm">
               <p className="text-slate-500 font-bold text-lg">No hay jugadores en el leaderboard.</p>
-              <p className="text-slate-600 text-sm mt-1">Añade uno usando el formulario de arriba.</p>
+              <p className="text-slate-600 text-sm mt-1">
+                {isOwner 
+                  ? "Añade uno usando el formulario de arriba." 
+                  : "El administrador de la sala aún no ha añadido a ningún jugador."}
+              </p>
             </div>
           ) : (
             sortedPlayers.map((player, index) => {
@@ -592,7 +648,7 @@ export default function LeaderboardTable({ lobbyId }: { lobbyId: string }) {
                           </div>
                         ) : (
                           <div className="space-y-3">
-                            {playerMatches[player.puuid].map((m: any) => {
+                            {playerMatches[player.puuid].map((m: MatchInfo) => {
                               const matchWin = m.win;
                               
                               // Separar los 10 participantes en 2 equipos de 5
@@ -695,7 +751,7 @@ export default function LeaderboardTable({ lobbyId }: { lobbyId: string }) {
                                     
                                     {/* Team 1 (Azul/Aliados) */}
                                     <div className="space-y-1">
-                                      {team1.map((p: any, idx: number) => (
+                                      {team1.map((p: ParticipantMatchInfo, idx: number) => (
                                         <div key={idx} className="flex items-center gap-1.5 truncate max-w-[130px]">
                                           <img 
                                             src={`https://ddragon.leagueoflegends.com/cdn/14.3.1/img/champion/${p.championName}.png`}
@@ -715,7 +771,7 @@ export default function LeaderboardTable({ lobbyId }: { lobbyId: string }) {
 
                                     {/* Team 2 (Rojo/Enemigos) */}
                                     <div className="space-y-1">
-                                      {team2.map((p: any, idx: number) => (
+                                      {team2.map((p: ParticipantMatchInfo, idx: number) => (
                                         <div key={idx} className="flex items-center gap-1.5 truncate max-w-[130px]">
                                           <img 
                                             src={`https://ddragon.leagueoflegends.com/cdn/14.3.1/img/champion/${p.championName}.png`}

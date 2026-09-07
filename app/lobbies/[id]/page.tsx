@@ -4,13 +4,15 @@ import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 import LobbyAdminControls from '@/components/LobbyAdminControls';
+import { getAuthUser } from '@/lib/auth';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-anon-key';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export default async function LobbyPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const user = await getAuthUser();
 
   // Hacer fetch de los datos a Supabase
   const { data: lobby, error } = await supabase
@@ -19,9 +21,19 @@ export default async function LobbyPage({ params }: { params: Promise<{ id: stri
     .eq('id', id)
     .single();
 
-  if (error || !lobby) {
+  if (error) {
+    if (error.code === 'PGRST116' || error.code === '22P02') {
+      notFound();
+    }
+    console.error('Error fetching lobby:', error);
+    throw new Error('Error al cargar la sala.');
+  }
+
+  if (!lobby) {
     notFound();
   }
+
+  const isOwner = Boolean(user && lobby.created_by && user.id === lobby.created_by);
 
   // Calcular días restantes
   const endDate = new Date(lobby.end_date);
@@ -47,6 +59,7 @@ export default async function LobbyPage({ params }: { params: Promise<{ id: stri
             lobbyId={lobby.id} 
             initialName={lobby.name} 
             initialEndDate={lobby.end_date} 
+            isOwner={isOwner}
           />
         </div>
 
@@ -63,7 +76,7 @@ export default async function LobbyPage({ params }: { params: Promise<{ id: stri
           </p>
         </header>
 
-        <LeaderboardTable lobbyId={id} />
+        <LeaderboardTable lobbyId={id} isOwner={isOwner} />
       </div>
     </main>
   );

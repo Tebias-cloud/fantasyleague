@@ -9,6 +9,7 @@ export default function CreateLobbyForm() {
   const router = useRouter();
   const [step, setStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     name: '',
     startDate: '',
@@ -18,19 +19,44 @@ export default function CreateLobbyForm() {
     players: '',
   });
 
-  const nextStep = () => setStep(2);
-  const prevStep = () => setStep(1);
+  const nextStep = () => {
+    setError(null);
+    if (!formData.name.trim()) {
+      setError("El nombre de la sala es obligatorio.");
+      return;
+    }
+    if (!formData.startDate || !formData.endDate) {
+      setError("Debes indicar las fechas de inicio y fin.");
+      return;
+    }
+    if (new Date(formData.startDate) >= new Date(formData.endDate)) {
+      setError("La fecha de inicio debe ser anterior a la fecha de término.");
+      return;
+    }
+    setStep(2);
+  };
+
+  const prevStep = () => {
+    setError(null);
+    setStep(1);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
     setIsSubmitting(true);
     
     try {
       const lobbyId = await createLobby(formData);
       router.push(`/lobbies/${lobbyId}`);
-    } catch (error: any) {
-      console.error(error);
-      alert(error.message || "Hubo un error al crear la sala.");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Hubo un error al crear la sala.';
+      if (message.startsWith('UNAUTHORIZED')) {
+        router.push('/login');
+        return;
+      }
+      console.error('Error creating lobby:', message);
+      setError(message);
       setIsSubmitting(false);
     }
   };
@@ -46,6 +72,12 @@ export default function CreateLobbyForm() {
           Paso {step} de 2
         </span>
       </div>
+
+      {error && (
+        <div className="mb-5 p-3.5 bg-red-950/40 border border-red-800/60 rounded-xl text-red-300 text-xs font-semibold animate-in fade-in duration-200">
+          {error}
+        </div>
+      )}
 
       <form onSubmit={step === 2 ? handleSubmit : (e) => { e.preventDefault(); nextStep(); }}>
         {step === 1 && (
@@ -127,7 +159,7 @@ export default function CreateLobbyForm() {
                 rows={4}
                 value={formData.players}
                 onChange={e => setFormData({...formData, players: e.target.value})}
-                placeholder="Hide on bush#KR1&#10;Agurin#EUW&#10;..."
+                placeholder="JugadorEjemplo#LAS1&#10;OtroJugador#NA1&#10;..."
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl py-3 px-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-colors resize-none"
               />
               <p className="text-xs text-slate-400 mt-1">Ingresa un Riot ID por línea (ej: Nombre#TAG)</p>

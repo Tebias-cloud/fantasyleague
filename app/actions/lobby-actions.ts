@@ -1,14 +1,13 @@
 "use server";
 
 import { createClient } from '@supabase/supabase-js';
-import { calculateAbsoluteLP } from '@/lib/riot-api';
+import { calculateAbsoluteLP, getPlayerFullData } from '@/lib/riot-api';
+import { requireAuth } from '@/lib/auth';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder-service-role-key';
 
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey);
-
-import { getPlayerFullData } from '@/lib/riot-api';
 
 export async function createLobby(formData: {
   name: string;
@@ -18,27 +17,47 @@ export async function createLobby(formData: {
   maxPlayers: number;
   players: string;
 }) {
+  // Gate: only authenticated users can create lobbies.
+  const user = await requireAuth();
+
+  const trimmedName = (formData.name || '').trim();
+  if (!trimmedName) {
+    throw new Error("El nombre de la sala es obligatorio.");
+  }
+
+  const startDate = new Date(formData.startDate);
+  const endDate = new Date(formData.endDate);
+
+  if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+    throw new Error("Fechas inválidas para la sala.");
+  }
+
+  if (startDate >= endDate) {
+    throw new Error("La fecha de inicio debe ser anterior a la fecha de término.");
+  }
+
   // 1. Crear el lobby
   const { data: lobbyData, error: lobbyError } = await supabaseAdmin
     .from('lobbies')
     .insert([
       {
-        name: formData.name,
-        start_date: new Date(formData.startDate).toISOString(),
-        end_date: new Date(formData.endDate).toISOString(),
+        name: trimmedName,
+        start_date: startDate.toISOString(),
+        end_date: endDate.toISOString(),
         settings: {
-          onlyUnranked: formData.onlyUnranked,
-          maxPlayers: formData.maxPlayers,
+          onlyUnranked: Boolean(formData.onlyUnranked),
+          maxPlayers: Number(formData.maxPlayers) || 10,
         },
         active: true,
+        created_by: user.id,
       }
     ])
     .select('id')
     .single();
 
-  if (lobbyError) {
+  if (lobbyError || !lobbyData) {
     console.error("Error creating lobby:", lobbyError);
-    throw new Error("Failed to create lobby");
+    throw new Error("No se pudo crear la sala.");
   }
 
   const lobbyId = lobbyData.id;
@@ -52,7 +71,6 @@ export async function createLobby(formData: {
   const validPlayerLines = playerLines.filter(line => line.includes('#'));
 
   if (playerLines.length > 0 && validPlayerLines.length === 0) {
-    // Si metió texto pero nada con '#'
     throw new Error("Debes incluir el #TAG de Riot para cada jugador (ej: Nombre#TAG)");
   }
 
@@ -61,8 +79,7 @@ export async function createLobby(formData: {
     if (!gameName || !tagLine) continue;
 
     try {
-      // Fetch from Riot API
-      const riotData = await getPlayerFullData(gameName, tagLine);
+      const riotData = await getPlayerFullData(gameName.trim(), tagLine.trim().replace(/^#/, ''));
       
       // UPSERT en players table
       await supabaseAdmin
@@ -71,6 +88,7 @@ export async function createLobby(formData: {
           puuid: riotData.puuid,
           game_name: riotData.game_name,
           tag_line: riotData.tag_line,
+          profile_icon_id: riotData.profile_icon_id,
         });
 
       // Insert en lobby_players
@@ -96,14 +114,37 @@ export async function createLobby(formData: {
           total_losses: riotData.losses,
         });
         
-    } catch (error) {
-      console.error(`Error processing player ${line}:`, error);
-      // Podríamos agregar a una lista de errores para avisar al usuario,
-      // pero por el MVP simplemente saltamos el jugador si falla.
+    } catch (error: unknown) {
+      const errMsg = error instanceof Error ? error.message : 'Error procesando jugador';
+      console.error(`Error processing player ${line}:`, errMsg);
     }
   }
 
   return lobbyId;
+}
+
+interface RawSnapshot {
+  tier: string;
+  division: string;
+  lp: number;
+  total_wins: number;
+  total_losses: number;
+  created_at: string;
+}
+
+interface RawPlayer {
+  puuid: string;
+  game_name: string;
+  tag_line: string;
+  profile_icon_id: number | null;
+  player_snapshots: RawSnapshot[];
+}
+
+interface RawLobbyPlayerRow {
+  start_absolute_lp: number;
+  start_wins: number;
+  start_losses: number;
+  player: RawPlayer | RawPlayer[] | null;
 }
 
 export async function getLobbyPlayers(lobbyId: string) {
@@ -130,16 +171,36 @@ export async function getLobbyPlayers(lobbyId: string) {
     `)
     .eq('lobby_id', lobbyId);
 
-  if (error) {
+  if (error || !data) {
     console.error("Error fetching lobby players:", error);
     throw new Error("Failed to fetch lobby players");
   }
 
-  return data.map((row: any) => {
-    // Si player es un arreglo (dependiendo de la FK de Supabase, puede venir como array), lo tomamos.
+  const typedRows = data as unknown as RawLobbyPlayerRow[];
+
+  return typedRows.map((row) => {
     const player = Array.isArray(row.player) ? row.player[0] : row.player;
     
-    const snapshots = player.player_snapshots.sort((a: any, b: any) => 
+    if (!player) {
+      return {
+        puuid: '',
+        game_name: 'Desconocido',
+        tag_line: '',
+        profile_icon_id: null,
+        start_absolute_lp: row.start_absolute_lp,
+        current_absolute_lp: row.start_absolute_lp,
+        delta: 0,
+        tier: 'UNRANKED',
+        division: '',
+        lp: 0,
+        wins: 0,
+        losses: 0,
+        winrate: 0,
+        history: [{ date: 'Inicio', lp: row.start_absolute_lp }]
+      };
+    }
+
+    const snapshots = (player.player_snapshots || []).slice().sort((a, b) => 
       new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
     );
 
@@ -148,8 +209,8 @@ export async function getLobbyPlayers(lobbyId: string) {
     const currentTier = latestSnapshot?.tier || 'UNRANKED';
     const currentDivision = latestSnapshot?.division || '';
     const currentLp = latestSnapshot?.lp || 0;
-    const currentWins = latestSnapshot?.total_wins || row.start_wins;
-    const currentLosses = latestSnapshot?.total_losses || row.start_losses;
+    const currentWins = latestSnapshot?.total_wins ?? row.start_wins;
+    const currentLosses = latestSnapshot?.total_losses ?? row.start_losses;
 
     const currentAbsoluteLp = calculateAbsoluteLP(currentTier, currentDivision, currentLp);
     const delta = currentAbsoluteLp - row.start_absolute_lp;
@@ -157,7 +218,7 @@ export async function getLobbyPlayers(lobbyId: string) {
     const totalGames = currentWins + currentLosses;
     const winrate = totalGames > 0 ? Math.round((currentWins / totalGames) * 100) : 0;
 
-    const history = snapshots.map((snap: any) => {
+    const history = snapshots.map((snap) => {
       const snapAbsLp = calculateAbsoluteLP(snap.tier, snap.division, snap.lp);
       return {
         date: new Date(snap.created_at).toLocaleDateString('es-ES', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
@@ -211,7 +272,8 @@ export async function getAllLobbies() {
   const { data, error } = await supabaseAdmin
     .from('lobbies')
     .select('id, name, start_date, end_date, active')
-    .order('start_date', { ascending: false });
+    .order('start_date', { ascending: false })
+    .limit(50);
 
   if (error) {
     console.error("Error fetching all lobbies:", error);
@@ -222,33 +284,101 @@ export async function getAllLobbies() {
 }
 
 export async function updateLobby(id: string, data: { name?: string; end_date?: string }) {
-  const updates: any = {};
-  if (data.name) updates.name = data.name;
-  if (data.end_date) updates.end_date = data.end_date;
+  try {
+    const user = await requireAuth();
 
-  const { error } = await supabaseAdmin
-    .from('lobbies')
-    .update(updates)
-    .eq('id', id);
+    // Check ownership
+    const { data: lobby, error: fetchError } = await supabaseAdmin
+      .from('lobbies')
+      .select('created_by, start_date')
+      .eq('id', id)
+      .single();
 
-  if (error) {
-    console.error("Error updating lobby:", error);
-    return { error: error.message };
+    if (fetchError || !lobby) {
+      return { error: 'Sala no encontrada.' };
+    }
+
+    if (!lobby.created_by || lobby.created_by !== user.id) {
+      return { error: 'No tienes permisos para modificar esta sala.' };
+    }
+
+    const updates: { name?: string; end_date?: string } = {};
+    if (typeof data.name === 'string') {
+      const trimmed = data.name.trim();
+      if (!trimmed) {
+        return { error: 'El nombre de la sala no puede estar vacío.' };
+      }
+      updates.name = trimmed;
+    }
+
+    if (data.end_date) {
+      const newEndDate = new Date(data.end_date);
+      if (isNaN(newEndDate.getTime())) {
+        return { error: 'Fecha de término no válida.' };
+      }
+      if (new Date(lobby.start_date) >= newEndDate) {
+        return { error: 'La fecha de término debe ser posterior a la fecha de inicio.' };
+      }
+      updates.end_date = newEndDate.toISOString();
+    }
+
+    const { error } = await supabaseAdmin
+      .from('lobbies')
+      .update(updates)
+      .eq('id', id);
+
+    if (error) {
+      console.error("Error updating lobby:", error);
+      return { error: 'Ocurrió un error al actualizar la sala.' };
+    }
+
+    return { success: true };
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message.startsWith('UNAUTHORIZED')) {
+      return { error: 'Debes iniciar sesión para modificar esta sala.' };
+    }
+    const errMsg = error instanceof Error ? error.message : 'Error desconocido';
+    console.error("Error in updateLobby:", errMsg);
+    return { error: 'Ocurrió un error al actualizar la sala.' };
   }
-
-  return { success: true };
 }
 
 export async function deleteLobby(id: string) {
-  const { error } = await supabaseAdmin
-    .from('lobbies')
-    .delete()
-    .eq('id', id);
+  try {
+    const user = await requireAuth();
 
-  if (error) {
-    console.error("Error deleting lobby:", error);
-    return { error: error.message };
+    // Check ownership
+    const { data: lobby, error: fetchError } = await supabaseAdmin
+      .from('lobbies')
+      .select('created_by')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !lobby) {
+      return { error: 'Sala no encontrada.' };
+    }
+
+    if (!lobby.created_by || lobby.created_by !== user.id) {
+      return { error: 'No tienes permisos para eliminar esta sala.' };
+    }
+
+    const { error } = await supabaseAdmin
+      .from('lobbies')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error("Error deleting lobby:", error);
+      return { error: 'Ocurrió un error al eliminar la sala.' };
+    }
+
+    return { success: true };
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message.startsWith('UNAUTHORIZED')) {
+      return { error: 'Debes iniciar sesión para eliminar esta sala.' };
+    }
+    const errMsg = error instanceof Error ? error.message : 'Error desconocido';
+    console.error("Error in deleteLobby:", errMsg);
+    return { error: 'Ocurrió un error al eliminar la sala.' };
   }
-
-  return { success: true };
 }

@@ -30,10 +30,10 @@ export default async function AllLobbiesPage() {
 
         <header className="text-center space-y-4 mb-12">
           <h1 className="text-4xl md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400 tracking-tight">
-            Todas las Salas
+            Últimas Salas
           </h1>
           <p className="text-slate-400 font-medium">
-            Explora todas las competencias creadas en la plataforma.
+            Explora las competencias más recientes (hasta 50 salas).
           </p>
         </header>
 

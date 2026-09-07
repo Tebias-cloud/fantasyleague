@@ -74,7 +74,7 @@ const formatYAxisTick = (value: number) => {
 interface Player {
   puuid: string;
   game_name: string;
-  profile_icon_id?: number;
+  profile_icon_id?: number | null;
   history: { date: string, lp: number }[];
   delta?: number;
   wins?: number;
@@ -84,7 +84,7 @@ interface Player {
 }
 
 // Helper para analizar y determinar racha, tilt o tryhard del invocador
-const getPlayerStatus = (player: any) => {
+const getPlayerStatus = (player?: Player) => {
   const history = player?.history || [];
   const delta = player?.delta || 0;
   
@@ -237,12 +237,17 @@ const GlobalChart = React.memo(function GlobalChart({ players }: GlobalChartProp
       dates = dates.slice(dates.length - selectedDays);
     }
 
+    const playerHistoryMaps = filteredPlayers.map(p => ({
+      name: p.game_name,
+      map: new Map(p.history.map(h => [h.date, h.lp]))
+    }));
+
     const chartData = dates.map(date => {
-      const dataPoint: any = { date };
-      filteredPlayers.forEach(p => {
-        const historyPoint = p.history.find(h => h.date === date);
-        if (historyPoint) {
-          dataPoint[p.game_name] = historyPoint.lp;
+      const dataPoint: Record<string, string | number> = { date };
+      playerHistoryMaps.forEach(p => {
+        const lp = p.map.get(date);
+        if (lp !== undefined) {
+          dataPoint[p.name] = lp;
         }
       });
       return dataPoint;
@@ -259,21 +264,34 @@ const GlobalChart = React.memo(function GlobalChart({ players }: GlobalChartProp
     return chartData;
   }, [filteredPlayers, selectedDays]);
 
-  const CustomTooltip = ({ active, payload, label }: any) => {
+  interface TooltipPayloadItem {
+    name: string;
+    value: number;
+    color?: string;
+    payload?: Record<string, unknown>;
+  }
+
+  interface CustomTooltipProps {
+    active?: boolean;
+    payload?: TooltipPayloadItem[];
+    label?: string;
+  }
+
+  const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
     if (active && payload && payload.length) {
       // 1. Filtrar duplicados causados por StrictMode o re-renders
-      let filteredPayload = payload.filter((item: any, index: number, self: any[]) => 
+      let filteredPayload = payload.filter((item, index: number, self: TooltipPayloadItem[]) => 
         self.findIndex(t => t.name === item.name) === index
       );
 
       // 2. EXCLUIR los jugadores desactivados
-      filteredPayload = filteredPayload.filter((item: any) => !hiddenPlayers.has(item.name));
+      filteredPayload = filteredPayload.filter((item: TooltipPayloadItem) => !hiddenPlayers.has(item.name));
 
       if (filteredPayload.length === 0) return null;
 
       // 3. Encontrar el item del payload que corresponde al jugador más cercano al cursor (hoveredPlayer)
       const activeName = hoveredPlayer || filteredPayload[0].name;
-      const item = filteredPayload.find((x: any) => x.name === activeName) || filteredPayload[0];
+      const item = filteredPayload.find((x: TooltipPayloadItem) => x.name === activeName) || filteredPayload[0];
       
       const player = players.find(p => p.game_name === item.name);
       if (!player) return null;
@@ -314,22 +332,29 @@ const GlobalChart = React.memo(function GlobalChart({ players }: GlobalChartProp
     return null;
   };
 
-  const renderLegend = (props: any) => {
-    const { payload } = props;
+  interface LegendEntry {
+    value?: string | number;
+    color?: string;
+    type?: string;
+  }
+
+  const renderLegend = (props: { payload?: ReadonlyArray<LegendEntry> }) => {
+    const payload = props.payload || [];
     
     // Filtrar duplicados en la leyenda
-    const uniquePayload = payload.filter((entry: any, index: number, self: any[]) => 
+    const uniquePayload = payload.filter((entry: LegendEntry, index: number, self: ReadonlyArray<LegendEntry>) => 
       self.findIndex(t => t.value === entry.value) === index
     );
 
     return (
       <ul className="flex flex-wrap justify-center gap-x-4 gap-y-2 mt-4 select-none">
-        {uniquePayload.map((entry: any, index: number) => {
-          const player = players.find(p => p.game_name === entry.value);
+        {uniquePayload.map((entry: LegendEntry, index: number) => {
+          const entryVal = String(entry.value ?? '');
+          const player = players.find(p => p.game_name === entryVal);
           const iconId = player?.profile_icon_id;
-          const isHovered = hoveredPlayer === entry.value;
+          const isHovered = hoveredPlayer === entryVal;
           const hasActiveHover = hoveredPlayer !== null;
-          const isHidden = hiddenPlayers.has(entry.value);
+          const isHidden = hiddenPlayers.has(entryVal);
           const statusBadge = getPlayerStatus(player);
 
           return (
@@ -338,10 +363,10 @@ const GlobalChart = React.memo(function GlobalChart({ players }: GlobalChartProp
               className={`flex items-center gap-1.5 text-xs font-bold transition-all duration-200 cursor-pointer
                 ${isHidden ? 'opacity-20 line-through scale-90 text-slate-500 hover:opacity-40' : 
                   (isHovered ? 'text-white scale-105 opacity-100' : (hasActiveHover ? 'text-slate-600 opacity-25 scale-95' : 'text-slate-300 hover:text-white'))}`}
-              onMouseEnter={() => !isHidden && setHoveredPlayer(entry.value)}
+              onMouseEnter={() => !isHidden && setHoveredPlayer(entryVal)}
               onMouseLeave={() => setHoveredPlayer(null)}
               onClick={() => {
-                togglePlayerVisibility(entry.value);
+                togglePlayerVisibility(entryVal);
                 setHoveredPlayer(null); // Limpiar hover para evitar desfases visuales
               }}
             >
@@ -352,12 +377,12 @@ const GlobalChart = React.memo(function GlobalChart({ players }: GlobalChartProp
               <div className="w-5 h-5 rounded-full overflow-hidden border border-slate-850 bg-slate-950 flex items-center justify-center shrink-0">
                 <SafeProfileIcon 
                   iconId={iconId || 0}
-                  alt={entry.value}
+                  alt={entryVal}
                   className="w-full h-full object-cover"
                 />
               </div>
               <span className="text-[11px] font-bold flex items-center gap-1">
-                <span>{entry.value}</span>
+                <span>{entryVal}</span>
                 {statusBadge && (
                   <span 
                     title={statusBadge.desc}
@@ -466,33 +491,40 @@ const GlobalChart = React.memo(function GlobalChart({ players }: GlobalChartProp
             Restablecer Filtros
           </button>
         </div>
+      ) : data.length === 0 ? (
+        <div className="h-80 w-full flex flex-col items-center justify-center border border-dashed border-slate-800 bg-slate-950/20 rounded-3xl py-20 gap-3">
+          <span className="text-slate-500 font-bold text-sm text-center px-4">Aún no hay historial de progreso registrado.</span>
+          <span className="text-slate-600 text-xs text-center px-4">El gráfico aparecerá cuando se actualicen los LPs.</span>
+        </div>
       ) : (
         <div className="h-80 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart 
             data={data} 
             margin={{ top: 5, right: 20, bottom: 5, left: 0 }}
-            onMouseMove={(state: any) => {
-              if (state && state.activePayload && state.activePayload.length > 0 && state.chartY !== undefined) {
-                const payload = state.activePayload;
+            onMouseMove={(state) => {
+              const activePayload = (state as { activePayload?: Array<{ name?: string; value?: number }>; chartY?: number })?.activePayload;
+              const chartY = (state as { chartY?: number })?.chartY;
+              if (activePayload && activePayload.length > 0 && chartY !== undefined) {
+                const payload = activePayload;
                 const plotHeight = 280; // Altura estimativa del plot
                 const topOffset = 15;
                 
                 // Porcentaje de la posición del ratón de arriba a abajo
-                const pct = Math.max(0, Math.min(1, (state.chartY - topOffset) / plotHeight));
+                const pct = Math.max(0, Math.min(1, (chartY - topOffset) / plotHeight));
                 
                 // Interpolar el LP bajo el cursor
                 const estimatedLP = yMax - pct * (yMax - yMin);
                 
-                let closest = payload[0].name;
+                let closest = payload[0].name || '';
                 let minDiff = Infinity;
                 
-                payload.forEach((item: any) => {
+                payload.forEach((item) => {
                   if (item.value !== undefined) {
                     const diff = Math.abs(item.value - estimatedLP);
                     if (diff < minDiff) {
                       minDiff = diff;
-                      closest = item.name;
+                      closest = item.name || '';
                     }
                   }
                 });
