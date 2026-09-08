@@ -185,8 +185,9 @@ async function run() {
     console.log(`Los contadores de victorias y derrotas ahora son 100% realistas y el gráfico tiene curvas reales.`);
     console.log('=========================================');
 
-  } catch (error: any) {
-    console.error('❌ Error al poblar estadísticas realistas:', error.message || error);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('❌ Error al poblar estadísticas realistas:', message);
   }
 }
 

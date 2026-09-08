@@ -1,6 +1,5 @@
 import { getPlayerFullData } from '../lib/riot-api';
 import { loadEnvConfig } from '@next/env';
-import * as path from 'path';
 
 // Cargar variables de entorno usando la utilidad de Next.js
 loadEnvConfig(process.cwd());

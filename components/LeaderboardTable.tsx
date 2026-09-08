@@ -1,5 +1,8 @@
 "use client";
 
+/* External profile icons use dynamic URLs and native fallback handling. */
+/* eslint-disable @next/next/no-img-element */
+
 import { useState, useEffect, useCallback, useMemo, memo } from 'react';
 import PlayerChart from './PlayerChart';
 import GlobalChart from './GlobalChart';
@@ -20,8 +23,9 @@ const SafeProfileIcon = memo(function SafeProfileIcon({ iconId, alt, className }
     return failedIconsCache.has(primaryUrl) ? fallbackUrl : primaryUrl;
   });
 
+  // External dynamic URLs use the native image element to preserve the existing fallback behavior.
   return (
-    <img 
+    <img
       src={src} 
       alt={alt} 
       className={className}
@@ -685,7 +689,7 @@ export default function LeaderboardTable({ lobbyId, isOwner = false }: Leaderboa
                                     <div className="flex items-center gap-4">
                                       {/* Champion Icon redondo */}
                                       <div className="relative w-12 h-12 rounded-full overflow-hidden border-2 border-slate-800 shrink-0">
-                                        <img 
+                                        <img
                                           src={`https://ddragon.leagueoflegends.com/cdn/14.3.1/img/champion/${m.championName}.png`}
                                           alt={m.championName}
                                           className="w-full h-full object-coverScale"
@@ -734,7 +738,7 @@ export default function LeaderboardTable({ lobbyId, isOwner = false }: Leaderboa
                                             className={`relative w-7 h-7 rounded-lg overflow-hidden border border-slate-800/80 shrink-0 shadow
                                               ${isTrinket ? 'ml-2 border-emerald-900/40' : ''}`}
                                           >
-                                            <img 
+                                            <img
                                               src={`https://ddragon.leagueoflegends.com/cdn/14.3.1/img/item/${item}.png`}
                                               alt={`Item ${item}`}
                                               className="w-full h-full object-cover"
@@ -753,7 +757,7 @@ export default function LeaderboardTable({ lobbyId, isOwner = false }: Leaderboa
                                     <div className="space-y-1">
                                       {team1.map((p: ParticipantMatchInfo, idx: number) => (
                                         <div key={idx} className="flex items-center gap-1.5 truncate max-w-[130px]">
-                                          <img 
+                                          <img
                                             src={`https://ddragon.leagueoflegends.com/cdn/14.3.1/img/champion/${p.championName}.png`}
                                             alt={p.championName}
                                             className="w-3.5 h-3.5 rounded border border-slate-800 shrink-0"
@@ -773,7 +777,7 @@ export default function LeaderboardTable({ lobbyId, isOwner = false }: Leaderboa
                                     <div className="space-y-1">
                                       {team2.map((p: ParticipantMatchInfo, idx: number) => (
                                         <div key={idx} className="flex items-center gap-1.5 truncate max-w-[130px]">
-                                          <img 
+                                          <img
                                             src={`https://ddragon.leagueoflegends.com/cdn/14.3.1/img/champion/${p.championName}.png`}
                                             alt={p.championName}
                                             className="w-3.5 h-3.5 rounded border border-slate-800 shrink-0"

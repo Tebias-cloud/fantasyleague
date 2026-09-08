@@ -280,8 +280,9 @@ async function run() {
     console.log(`URL en tu navegador: http://localhost:3000/lobbies/${lobby.id}`);
     console.log('=========================================');
 
-  } catch (error: any) {
-    console.error('❌ Error al poblar sala multidivisión:', error.message || error);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('❌ Error al poblar sala multidivisión:', message);
   }
 }
 

@@ -1,5 +1,8 @@
 "use client";
 
+/* External profile icons use dynamic URLs and native fallback handling. */
+/* eslint-disable @next/next/no-img-element */
+
 import React, { useMemo, useState, useEffect } from 'react';
 import {
   LineChart,
@@ -141,8 +144,9 @@ const SafeProfileIcon = React.memo(function SafeProfileIcon({ iconId, alt, class
     setSrc(failedIconsCache.has(currentUrl) ? fallbackUrl : currentUrl);
   }, [iconId]);
 
+  // External dynamic URLs use the native image element to preserve the existing fallback behavior.
   return (
-    <img 
+    <img
       src={src}
       alt={alt}
       className={className}

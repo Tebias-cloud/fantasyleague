@@ -3,9 +3,7 @@ import { loadEnvConfig } from '@next/env';
 loadEnvConfig(process.cwd());
 
 import { createClient } from '@supabase/supabase-js';
-
-// Evitar hoisting usando require después de cargar el entorno
-const { getPlayerFullData } = require('../lib/riot-api');
+import { getPlayerFullData } from '../lib/riot-api';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -39,8 +37,9 @@ async function seedProLobby() {
         console.log(`   ✅ Encontrado: ${data.game_name}#${data.tag_line} - ${data.tier} ${data.division} (${data.lp} LP)`);
         // Espera de 1 segundo para evitar límites de la API de Riot (Rate Limit)
         await new Promise(res => setTimeout(res, 1000));
-      } catch (err: any) {
-        console.error(`   ❌ No se pudo cargar a ${pro.gameName}#${pro.tagLine}:`, err.message);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`   ❌ No se pudo cargar a ${pro.gameName}#${pro.tagLine}:`, message);
       }
     }
 
@@ -147,8 +146,9 @@ async function seedProLobby() {
     console.log(`URL para entrar: http://localhost:3000/lobbies/${lobby.id}`);
     console.log('=========================================');
 
-  } catch (error: any) {
-    console.error('❌ Falló la creación de la sala de prueba:', error.message || error);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('❌ Falló la creación de la sala de prueba:', message);
   }
 }
 
