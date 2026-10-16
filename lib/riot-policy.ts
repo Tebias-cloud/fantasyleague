@@ -1,5 +1,3 @@
-import 'server-only';
-
 /**
  * Dev keys are for local development, never for publicly accessible previews.
  * The production switch may only be enabled after Riot approves the product.
