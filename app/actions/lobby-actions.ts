@@ -315,3 +315,18 @@ export async function deleteLobby(id: string) {
     return { error: 'Ocurrió un error al eliminar la sala.' };
   }
 }
+
+
+/** Changing a private invite invalidates all previously shared links. */
+export async function rotateLobbyInvite(lobbyId: string) {
+  const user = await requireAuth();
+  const { data: lobby } = await admin.from('lobbies')
+    .select('created_by, visibility').eq('id', lobbyId).maybeSingle();
+  if (!lobby || lobby.created_by !== user.id || lobby.visibility !== 'private') {
+    return { error: 'Solo el creador puede regenerar una invitación privada.' };
+  }
+  const invite = createInvite();
+  const { error } = await admin.from('lobbies').update({ invite_token_hash: invite.hash }).eq('id', lobbyId);
+  if (error) return { error: 'No se pudo crear la invitación.' };
+  return { inviteToken: invite.token };
+}
