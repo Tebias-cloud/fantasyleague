@@ -186,8 +186,8 @@ export async function getLobbyPlayers(lobbyId: string, inviteToken?: string) {
 export async function getRecentLobbies() {
   const { data, error } = await supabaseAdmin
     .from('lobbies')
-    .eq('visibility', 'public')
     .select('id, name, start_date, end_date, active')
+    .eq('visibility', 'public')
     .eq('active', true)
     .order('start_date', { ascending: false })
     .limit(10);
@@ -203,8 +203,8 @@ export async function getRecentLobbies() {
 export async function getAllLobbies() {
   const { data, error } = await supabaseAdmin
     .from('lobbies')
-    .eq('visibility', 'public')
     .select('id, name, start_date, end_date, active')
+    .eq('visibility', 'public')
     .order('start_date', { ascending: false })
     .limit(50);
 
