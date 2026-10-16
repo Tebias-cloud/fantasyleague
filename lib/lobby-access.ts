@@ -1,5 +1,3 @@
-import 'server-only';
-
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { getAuthUser } from './auth';
