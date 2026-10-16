@@ -62,12 +62,14 @@ interface RawPlayer {
   game_name: string;
   tag_line: string;
   profile_icon_id: number | null;
-  player_snapshots: RawSnapshot[];
-}
+ }
 
 interface RawLobbyPlayerRow {
   start_absolute_lp: number;
   joined_at: string | null;
+  start_tier: string | null;
+  start_division: string | null;
+  start_lp: number | null;
   start_wins: number;
   start_losses: number;
   player: RawPlayer | RawPlayer[] | null;
@@ -81,21 +83,16 @@ export async function getLobbyPlayers(lobbyId: string, inviteToken?: string) {
     .select(`
       start_absolute_lp,
       joined_at,
+      start_tier,
+      start_division,
+      start_lp,
       start_wins,
       start_losses,
       player:players (
         puuid,
         game_name,
         tag_line,
-        profile_icon_id,
-        player_snapshots (
-          tier,
-          division,
-          lp,
-          total_wins,
-          total_losses,
-          created_at
-        )
+        profile_icon_id
       )
     `)
     .eq('lobby_id', lobbyId);
@@ -103,6 +100,23 @@ export async function getLobbyPlayers(lobbyId: string, inviteToken?: string) {
   if (error || !data) {
     console.error("Error fetching lobby players:", error);
     throw new Error("Failed to fetch lobby players");
+  }
+
+  const { data: lobbySnapshots, error: snapshotsError } = await admin
+    .from('lobby_player_snapshots')
+    .select('player_puuid, tier, division, lp, total_wins, total_losses, created_at')
+    .eq('lobby_id', lobbyId)
+    .lte('created_at', access.lobby.end_date)
+    .order('created_at', { ascending: true })
+    .limit(1000);
+  if (snapshotsError) throw new Error('No se pudo consultar el historial. Comprueba la migración 008.');
+
+  const byPlayer = new Map<string, RawSnapshot[]>();
+  for (const row of lobbySnapshots || []) {
+    const snapshot = row as RawSnapshot & { player_puuid: string };
+    const list = byPlayer.get(snapshot.player_puuid) || [];
+    list.push(snapshot);
+    byPlayer.set(snapshot.player_puuid, list);
   }
 
   const typedRows = data as unknown as RawLobbyPlayerRow[];
@@ -129,17 +143,14 @@ export async function getLobbyPlayers(lobbyId: string, inviteToken?: string) {
       };
     }
 
-    const snapshots = (player.player_snapshots || [])
-      .filter(snap => new Date(snap.created_at).getTime() >= new Date(row.joined_at || access.lobby.start_date).getTime())
-      .slice().sort((a, b) => 
-      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-    );
+    const snapshots = (byPlayer.get(player.puuid) || [])
+      .filter(snap => new Date(snap.created_at).getTime() >= new Date(row.joined_at || access.lobby.start_date).getTime());
 
     const latestSnapshot = snapshots[snapshots.length - 1];
     
-    const currentTier = latestSnapshot?.tier || 'UNRANKED';
-    const currentDivision = latestSnapshot?.division || '';
-    const currentLp = latestSnapshot?.lp || 0;
+    const currentTier = latestSnapshot?.tier || row.start_tier || 'UNRANKED';
+    const currentDivision = latestSnapshot?.division || row.start_division || '';
+    const currentLp = latestSnapshot?.lp ?? row.start_lp ?? 0;
     const currentWins = latestSnapshot?.total_wins ?? row.start_wins;
     const currentLosses = latestSnapshot?.total_losses ?? row.start_losses;
 
