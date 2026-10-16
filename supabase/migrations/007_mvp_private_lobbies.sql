@@ -32,6 +32,27 @@ CREATE POLICY "Leer participantes de lobbies públicos o propios"
       AND (l.visibility = 'public' OR l.created_by = auth.uid())
   ));
 
+-- Matches and aggregate stats also contain lobby_id and must not reveal private rooms.
+DROP POLICY IF EXISTS "Permitir lectura publica de lobby_player_matches" ON public.lobby_player_matches;
+DROP POLICY IF EXISTS "Leer partidas de salas visibles" ON public.lobby_player_matches;
+CREATE POLICY "Leer partidas de salas visibles"
+  ON public.lobby_player_matches FOR SELECT
+  USING (EXISTS (
+    SELECT 1 FROM public.lobbies l
+    WHERE l.id = lobby_player_matches.lobby_id
+      AND (l.visibility = 'public' OR l.created_by = auth.uid())
+  ));
+
+DROP POLICY IF EXISTS "Permitir lectura publica de lobby_player_stats" ON public.lobby_player_stats;
+DROP POLICY IF EXISTS "Leer estadísticas de salas visibles" ON public.lobby_player_stats;
+CREATE POLICY "Leer estadísticas de salas visibles"
+  ON public.lobby_player_stats FOR SELECT
+  USING (EXISTS (
+    SELECT 1 FROM public.lobbies l
+    WHERE l.id = lobby_player_stats.lobby_id
+      AND (l.visibility = 'public' OR l.created_by = auth.uid())
+  ));
+
 -- The current snapshots table has no lobby_id, but it exposes generic ranked
 -- information without revealing membership of private lobbies.
 -- Dedicated per-lobby historical snapshots are a future migration.
