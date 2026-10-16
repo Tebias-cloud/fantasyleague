@@ -4,7 +4,7 @@
  */
 export const PLATFORM_ROUTES = {
   br1: 'americas', la1: 'americas', la2: 'americas', na1: 'americas',
-  euw1: 'europe', eun1: 'europe', tr1: 'europe', ru: 'europe',
+  euw1: 'europe', eun1: 'europe', tr1: 'europe', ru: 'europe', me1: 'europe',
   kr: 'asia', jp1: 'asia',
   oc1: 'sea', sg2: 'sea', tw2: 'sea', vn2: 'sea',
 } as const;
@@ -15,6 +15,7 @@ export const PLATFORM_OPTIONS: { value: RiotPlatform; label: string }[] = [
   { value: 'br1', label: 'Brasil' }, { value: 'na1', label: 'NA' },
   { value: 'euw1', label: 'EUW' }, { value: 'eun1', label: 'EUNE' },
   { value: 'tr1', label: 'Turquía' }, { value: 'ru', label: 'Rusia' },
+  { value: 'me1', label: 'Oriente Medio (validar con Riot)' },
   { value: 'kr', label: 'Corea' }, { value: 'jp1', label: 'Japón' },
   { value: 'oc1', label: 'Oceanía' },
   { value: 'sg2', label: 'Singapur (incl. PH/TH)' },
