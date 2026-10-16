@@ -10,6 +10,7 @@ import { RefreshCw, UserPlus, Search, AlertCircle, Loader2, Timer, Award, Extern
 import { addPlayerToLobby, refreshLobbyPlayers, getPlayerMatchesAction } from '@/app/actions/riot-actions';
 import { getLobbyPlayers } from '@/app/actions/lobby-actions';
 import { MatchInfo, ParticipantMatchInfo } from '@/lib/riot-api';
+import { PLATFORM_OPTIONS, type RiotPlatform } from '@/lib/competition';
 
 // Caché global en memoria de iconos rotos para evitar parpadeos durante rediseños o renderizados del DOM
 const failedIconsCache = new Set<string>();
@@ -57,9 +58,11 @@ export interface LeaderboardPlayer {
 interface LeaderboardTableProps {
   lobbyId: string;
   isOwner?: boolean;
+  canJoin?: boolean;
+  inviteToken?: string;
 }
 
-export default function LeaderboardTable({ lobbyId, isOwner = false }: LeaderboardTableProps) {
+export default function LeaderboardTable({ lobbyId, isOwner = false, canJoin = false, inviteToken = '' }: LeaderboardTableProps) {
   const [players, setPlayers] = useState<LeaderboardPlayer[]>([]);
   const [expandedPlayer, setExpandedPlayer] = useState<string | null>(null);
   
@@ -71,6 +74,8 @@ export default function LeaderboardTable({ lobbyId, isOwner = false }: Leaderboa
   // Search state
   const [gameName, setGameName] = useState('');
   const [tagLine, setTagLine] = useState('');
+  const [platform, setPlatform] = useState<RiotPlatform>('la2');
+  const [consent, setConsent] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -84,7 +89,7 @@ export default function LeaderboardTable({ lobbyId, isOwner = false }: Leaderboa
 
   const fetchPlayers = useCallback(async () => {
     try {
-      const data = await getLobbyPlayers(lobbyId);
+      const data = await getLobbyPlayers(lobbyId, inviteToken);
       setPlayers(data);
     } catch (err) {
       console.error(err);
@@ -92,12 +97,12 @@ export default function LeaderboardTable({ lobbyId, isOwner = false }: Leaderboa
     } finally {
       setIsLoadingData(false);
     }
-  }, [lobbyId]);
+  }, [lobbyId, inviteToken]);
 
   // Cargar datos inicialmente
   useEffect(() => {
     let isMounted = true;
-    getLobbyPlayers(lobbyId)
+    getLobbyPlayers(lobbyId, inviteToken)
       .then((data) => {
         if (isMounted) {
           setPlayers(data);
@@ -173,7 +178,7 @@ export default function LeaderboardTable({ lobbyId, isOwner = false }: Leaderboa
       if (!playerMatches[puuid]) {
         setLoadingMatches(prev => ({ ...prev, [puuid]: true }));
         try {
-          const matches = await getPlayerMatchesAction(puuid);
+          const matches = await getPlayerMatchesAction(puuid, lobbyId, inviteToken);
           setPlayerMatches(prev => ({ ...prev, [puuid]: matches }));
         } catch (err) {
           console.error("Error loading matches:", err);
@@ -186,11 +191,12 @@ export default function LeaderboardTable({ lobbyId, isOwner = false }: Leaderboa
 
   const handleAddPlayer = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!consent) { setError('Confirma que tienes autorización para incluir ese Riot ID.'); return; }
     setError(null);
     setIsLoading(true);
 
     try {
-      const result = await addPlayerToLobby(lobbyId, gameName, tagLine);
+      const result = await addPlayerToLobby(lobbyId, gameName, tagLine, platform, inviteToken);
       
       if (result.error) {
         setError(result.error);
@@ -198,6 +204,7 @@ export default function LeaderboardTable({ lobbyId, isOwner = false }: Leaderboa
         await fetchPlayers(); // Recargar la lista desde la DB
         setGameName('');
         setTagLine('');
+        setConsent(false);
       }
     } catch {
       setError("Error inesperado al añadir jugador.");
@@ -208,7 +215,7 @@ export default function LeaderboardTable({ lobbyId, isOwner = false }: Leaderboa
 
   // Sort by absolute LP descending (memoized to avoid re-sorting on every 1s timer tick)
   const sortedPlayers = useMemo(() => {
-    return [...players].sort((a, b) => b.current_absolute_lp - a.current_absolute_lp);
+    return [...players].sort((a, b) => b.delta - a.delta || b.current_absolute_lp - a.current_absolute_lp);
   }, [players]);
 
   // Helpers para matches
@@ -278,14 +285,14 @@ export default function LeaderboardTable({ lobbyId, isOwner = false }: Leaderboa
     <div className="w-full max-w-5xl mx-auto space-y-10">
       
       {/* Search Form + Clock (Unificado para ahorrar espacio) */}
-      {isOwner && (
+      {canJoin && (
         <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-5 shadow-xl backdrop-blur-sm">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 pb-3 border-b border-slate-800/40">
             <div className="flex items-center gap-2">
               <div className="p-1.5 bg-emerald-500/10 rounded-lg">
                 <UserPlus className="w-4 h-4 text-emerald-400" />
               </div>
-              <h3 className="text-sm font-black text-white tracking-tight uppercase">Añadir Invocador</h3>
+              <h3 className="text-sm font-black text-white tracking-tight uppercase">{isOwner ? 'Añadir participante' : 'Unirse al desafío'}</h3>
             </div>
             
             <div className="flex items-center gap-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">
@@ -304,7 +311,7 @@ export default function LeaderboardTable({ lobbyId, isOwner = false }: Leaderboa
             </div>
           </div>
 
-          <form onSubmit={handleAddPlayer} className="grid grid-cols-1 md:grid-cols-[1fr_100px_auto] gap-3">
+          <form onSubmit={handleAddPlayer} className="grid grid-cols-1 md:grid-cols-[1fr_100px_120px_auto] gap-3">
             <div className="relative group">
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-emerald-400 transition-colors" />
               <input 
@@ -327,15 +334,24 @@ export default function LeaderboardTable({ lobbyId, isOwner = false }: Leaderboa
                 required
               />
             </div>
+            <select aria-label="Servidor de Riot" value={platform} onChange={e=>setPlatform(e.target.value as RiotPlatform)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-2 text-sm text-white focus:border-emerald-500 outline-none">
+              {PLATFORM_OPTIONS.map(option => <option value={option.value} key={option.value}>{option.label}</option>)}
+            </select>
             <button 
               type="submit" 
-              disabled={isLoading}
+              disabled={isLoading || !consent}
               className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black uppercase tracking-wider py-2.5 px-6 rounded-xl transition-all disabled:opacity-50 flex items-center justify-center gap-1.5 shadow-[0_0_15px_rgba(16,185,129,0.15)]"
             >
-              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Añadir'}
+              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : (isOwner ? 'Añadir' : 'Unirme')}
             </button>
           </form>
 
+          <label className="mt-4 flex items-start gap-2 text-xs text-slate-400">
+            <input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} className="mt-0.5"/>
+            Confirmo que tengo autorización para inscribir este Riot ID y mostrar su progreso SoloQ en la sala.
+          </label>
+          <p className="mt-2 text-xs text-slate-500">La identificación no está verificada mediante Riot Sign On. MVP sin premios ni apuestas.</p>
           {error && (
             <div className="mt-3 flex items-center gap-2 text-red-400 text-xs font-bold bg-red-400/5 border border-red-400/10 p-3 rounded-xl animate-in fade-in slide-in-from-top-1">
               <AlertCircle className="w-4 h-4" />
@@ -358,7 +374,7 @@ export default function LeaderboardTable({ lobbyId, isOwner = false }: Leaderboa
             <h2 className="text-3xl md:text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white to-slate-400 tracking-tighter uppercase">
               Ranking General
             </h2>
-            <p className="text-sm font-bold text-slate-500 uppercase tracking-widest mt-1">Clasificación en tiempo real de invocadores</p>
+            <p className="text-sm font-bold text-slate-500 uppercase tracking-widest mt-1">Clasificación por LP ganados desde la inscripción · SoloQ</p>
           </div>
           {isOwner && (
             <div className="flex items-center gap-3">
@@ -405,9 +421,9 @@ export default function LeaderboardTable({ lobbyId, isOwner = false }: Leaderboa
             <div className="py-20 text-center bg-slate-900/30 rounded-3xl border border-slate-800/50 backdrop-blur-sm">
               <p className="text-slate-500 font-bold text-lg">No hay jugadores en el leaderboard.</p>
               <p className="text-slate-600 text-sm mt-1">
-                {isOwner 
-                  ? "Añade uno usando el formulario de arriba." 
-                  : "El administrador de la sala aún no ha añadido a ningún jugador."}
+                {canJoin 
+                  ? "Añade un jugador o comparte el enlace de la sala." 
+                  : "Todavía no hay participantes."}
               </p>
             </div>
           ) : (

@@ -26,11 +26,15 @@ export default async function Home() {
             </span>
           </h1>
           <p className="text-lg md:text-xl text-slate-400 max-w-2xl mx-auto">
-            Crea salas privadas, compite con tus amigos y descubre quién es el verdadero tryhard. El que suba más LPs se lleva la gloria.
+            Desafíos SoloQ de 7, 14 o 30 días. Compite por quién gana más LP desde el inicio, incluso con jugadores de otros servidores.
           </p>
           
           {/* Navegación rápida (Elimina la adivinanza de hacer scroll) */}
-          <div className="pt-4 flex justify-center gap-4">
+          <p className="text-xs text-amber-300">MVP en preparación · Datos Riot reales no disponibles públicamente hasta recibir aprobación.</p>
+          <div className="pt-4 flex flex-wrap justify-center gap-4">
+            <Link href="/demo" className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-emerald-600 text-white font-bold hover:bg-emerald-500">
+              Probar demo sin API Key <ArrowRight className="w-4 h-4" />
+            </Link>
             <a 
               href="#recent-lobbies"
               className="inline-flex items-center gap-2 bg-slate-900/60 hover:bg-slate-900 border border-slate-800 hover:border-slate-700/80 text-emerald-400 hover:text-emerald-300 font-bold px-6 py-3 rounded-xl transition-all duration-300 backdrop-blur-sm shadow-sm"
@@ -65,8 +69,8 @@ export default async function Home() {
                 <TrendingUp className="w-6 h-6 text-cyan-400" />
               </div>
               <div>
-                <h3 className="text-xl font-bold text-white mb-2">Tracking Automático</h3>
-                <p className="text-slate-400">Nos conectamos con la API de Riot Games para actualizar los LPs de todos los participantes en tiempo real.</p>
+                <h3 className="text-xl font-bold text-white mb-2">Seguimiento SoloQ</h3>
+                <p className="text-slate-400">El creador actualiza los LP usando la API oficial cuando está autorizada. La demo muestra datos ficticios.</p>
               </div>
             </div>
 
@@ -101,6 +105,12 @@ export default async function Home() {
             </Link>
           </div>
         </div>
+        <footer className="flex flex-wrap gap-4 justify-center text-xs text-slate-500">
+          <Link href="/demo" className="hover:underline">Demo interactiva</Link>
+          <Link href="/legal/privacy" className="hover:underline">Privacidad</Link>
+          <Link href="/legal/terms" className="hover:underline">Términos</Link>
+          <span>Proyecto independiente, no afiliado a Riot Games.</span>
+        </footer>
       </div>
     </main>
   );

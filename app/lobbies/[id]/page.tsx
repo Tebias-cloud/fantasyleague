@@ -1,39 +1,25 @@
 import LeaderboardTable from '@/components/LeaderboardTable';
-import { createClient } from '@supabase/supabase-js';
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 import LobbyAdminControls from '@/components/LobbyAdminControls';
-import { getAuthUser } from '@/lib/auth';
+import { accessLobby } from '@/lib/lobby-access';
+import InviteLink from '@/components/InviteLink';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-anon-key';
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-export default async function LobbyPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function LobbyPage({
+  params, searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ invite?: string }>;
+}) {
   const { id } = await params;
-  const user = await getAuthUser();
-
-  // Hacer fetch de los datos a Supabase
-  const { data: lobby, error } = await supabase
-    .from('lobbies')
-    .select('*')
-    .eq('id', id)
-    .single();
-
-  if (error) {
-    if (error.code === 'PGRST116' || error.code === '22P02') {
-      notFound();
-    }
-    console.error('Error fetching lobby:', error);
-    throw new Error('Error al cargar la sala.');
-  }
-
-  if (!lobby) {
-    notFound();
-  }
-
-  const isOwner = Boolean(user && lobby.created_by && user.id === lobby.created_by);
+  const { invite } = await searchParams;
+  const access = await accessLobby(id, invite);
+  if (!access) notFound();
+  const { lobby, user, isOwner } = access;
+  const inviteToken = invite || '';
+  const isLoggedIn = Boolean(user);
+  const isPrivate = lobby.visibility === 'private';
 
   // Calcular días restantes
   const endDate = new Date(lobby.end_date);
@@ -64,6 +50,9 @@ export default async function LobbyPage({ params }: { params: Promise<{ id: stri
         </div>
 
         <header className="text-center space-y-4 mb-12">
+          <p className="text-xs font-semibold uppercase tracking-widest text-emerald-400">
+            {isPrivate ? 'Sala privada · Acceso con invitación' : 'Sala pública · Desafío SoloQ'}
+          </p>
           <h1 className="text-4xl md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400 tracking-tight">
             {lobby.name}
           </h1>
@@ -76,7 +65,13 @@ export default async function LobbyPage({ params }: { params: Promise<{ id: stri
           </p>
         </header>
 
-        <LeaderboardTable lobbyId={id} isOwner={isOwner} />
+        {isPrivate && isOwner && <InviteLink lobbyId={id} initialToken={inviteToken} />}
+        {!isLoggedIn && (
+          <p className="text-center text-sm text-amber-200 rounded-xl bg-slate-900 border border-slate-800 p-4">
+            <Link className="underline font-semibold" href="/login">Inicia sesión</Link> para unirte usando tu Riot ID.
+          </p>
+        )}
+        <LeaderboardTable lobbyId={id} isOwner={isOwner} canJoin={isLoggedIn} inviteToken={inviteToken} />
       </div>
     </main>
   );

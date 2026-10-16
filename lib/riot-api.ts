@@ -3,6 +3,8 @@
  * Flow: Account-V1 (PUUID) -> Summoner-V4 (SummonerID) -> League-V4 (Rank Info)
  */
 
+import { getRiotRegion, isRiotPlatform } from './competition';
+
 function getRiotApiKey(): string {
   const key = process.env.RIOT_API_KEY;
   if (!key) {
@@ -80,6 +82,7 @@ interface RiotMatchParticipant {
 interface RiotMatchDetail {
   info: {
     gameMode: string;
+    queueId: number;
     gameCreation: number;
     gameDuration: number;
     participants: RiotMatchParticipant[];
@@ -177,53 +180,31 @@ async function riotFetch<T>(url: string): Promise<T> {
   }
 }
 
-export function getRouteByTag(tagLine: string): { region: string; platform: string } {
-  const tag = (tagLine || '').toUpperCase().trim();
-  
-  // Default to LAS
-  let region = 'americas';
-  let platform = 'la2';
-  
-  if (['EUW', 'EUW1', 'EUNE', 'EUN1', 'TR', 'RU'].some(t => tag.includes(t))) {
-    region = 'europe';
-    platform = tag.includes('EUN') ? 'eun1' : tag.includes('TR') ? 'tr1' : tag.includes('RU') ? 'ru' : 'euw1';
-  } else if (['KR', 'KR1', 'JP', 'JP1'].some(t => tag.includes(t))) {
-    region = 'asia';
-    platform = tag.includes('JP') ? 'jp1' : 'kr';
-  } else if (['NA', 'NA1', 'LAN', 'LA1', 'LAS', 'LA2', 'BR', 'BR1'].some(t => tag.includes(t))) {
-    region = 'americas';
-    if (tag.includes('NA')) platform = 'na1';
-    else if (tag.includes('LAN') || tag.includes('LA1')) platform = 'la1';
-    else if (tag.includes('LAS') || tag.includes('LA2')) platform = 'la2';
-    else if (tag.includes('BR')) platform = 'br1';
-  } else if (['OCE', 'OC1', 'PH', 'SG', 'TH', 'TW', 'VN'].some(t => tag.includes(t))) {
-    region = 'sea';
-    if (tag.includes('OCE') || tag.includes('OC1')) platform = 'oc1';
-    else if (tag.includes('PH')) platform = 'ph2';
-    else if (tag.includes('SG')) platform = 'sg2';
-    else if (tag.includes('TH')) platform = 'th2';
-    else if (tag.includes('TW')) platform = 'tw2';
-    else if (tag.includes('VN')) platform = 'vn2';
-  }
-  
-  return { region, platform };
+/**
+ * Riot ID tags are user-defined: they do not identify the player's platform.
+ * This must be supplied explicitly by the user or verified outside the tag.
+ */
+export function getRouteByPlatform(platform: string): { region: string; platform: string } {
+  const normalized = platform.toLowerCase().trim();
+  if (!isRiotPlatform(normalized)) throw new RiotApiError('Servidor de Riot no válido.', 400);
+  return { region: getRiotRegion(normalized), platform: normalized };
 }
 
-export async function getPlayerFullData(gameName: string, tagLine: string): Promise<LeagueInfo> {
-  const { region, platform } = getRouteByTag(tagLine);
+export async function getPlayerFullData(gameName: string, tagLine: string, platform: string = 'la2'): Promise<LeagueInfo> {
+  const route = getRouteByPlatform(platform);
   try {
     // Paso 1: Account-V1 (Obtener PUUID)
-    const accountUrl = `https://${region}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(gameName)}/${encodeURIComponent(tagLine)}`;
+    const accountUrl = `https://${route.region}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(gameName)}/${encodeURIComponent(tagLine)}`;
     const accountData = await riotFetch<RiotAccount>(accountUrl);
     const puuid = accountData.puuid;
 
     // Paso 2: Summoner-V4 (Obtener Profile Icon)
-    const summonerUrl = `https://${platform}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/${puuid}`;
+    const summonerUrl = `https://${route.platform}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/${puuid}`;
     const summonerData = await riotFetch<RiotSummoner>(summonerUrl);
     const profileIconId = summonerData.profileIconId;
 
     // Paso 3: League-V4 (Obtener info de SoloQ por PUUID)
-    const leagueUrl = `https://${platform}.api.riotgames.com/lol/league/v4/entries/by-puuid/${puuid}`;
+    const leagueUrl = `https://${route.platform}.api.riotgames.com/lol/league/v4/entries/by-puuid/${puuid}`;
     const leagueEntries = await riotFetch<RiotLeagueEntry[]>(leagueUrl);
 
     // Buscar SoloQ (RANKED_SOLO_5x5)
@@ -295,18 +276,20 @@ export interface MatchInfo {
   participants: ParticipantMatchInfo[];
 }
 
-export async function getPlayerRecentMatches(puuid: string, tagLine: string = 'LAS'): Promise<MatchInfo[]> {
-  const { region } = getRouteByTag(tagLine);
+export async function getPlayerRecentMatches(puuid: string, platform: string = 'la2'): Promise<MatchInfo[]> {
+  const { region } = getRouteByPlatform(platform);
   try {
     // Obtener los últimos 5 IDs de partidas
-    const matchesUrl = `https://${region}.api.riotgames.com/lol/match/v5/matches/by-puuid/${puuid}/ids?start=0&count=5`;
+    const matchesUrl = `https://${region}.api.riotgames.com/lol/match/v5/matches/by-puuid/${puuid}/ids?start=0&count=5&queue=420`;
     const matchIds = await riotFetch<string[]>(matchesUrl);
 
     const matchPromises = matchIds.map(async (matchId) => {
       try {
         const detailUrl = `https://${region}.api.riotgames.com/lol/match/v5/matches/${matchId}`;
         const matchDetail = await riotFetch<RiotMatchDetail>(detailUrl);
-        
+        // Una competición SoloQ no puede mostrar Flex / normales como si contaran.
+        if (matchDetail.info.queueId !== 420) return null;
+
         // Buscar el participante que corresponda a nuestro PUUID
         const participant = matchDetail.info.participants.find(
           (p) => p.puuid === puuid
