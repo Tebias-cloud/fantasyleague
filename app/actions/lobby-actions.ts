@@ -18,6 +18,7 @@ export async function createLobby(formData: {
   onlyUnranked: boolean;
   maxPlayers: number;
 }) {
+  if (process.env.FANTASYLEAGUE_DEMO_ONLY === 'true') throw new Error('DEMO_ONLY');
   const user = await requireAuth();
   const name = (formData.name || '').trim();
   if (!name || name.length > 80) throw new Error('El nombre de la sala debe tener entre 1 y 80 caracteres.');
@@ -228,6 +229,7 @@ export async function getAllLobbies() {
 }
 
 export async function updateLobby(id: string, data: { name?: string; end_date?: string }) {
+  if (process.env.FANTASYLEAGUE_DEMO_ONLY === 'true') return { error: 'Modo demostración: modificaciones deshabilitadas.' };
   try {
     const user = await requireAuth();
 
@@ -281,6 +283,7 @@ export async function updateLobby(id: string, data: { name?: string; end_date?: 
 }
 
 export async function deleteLobby(id: string) {
+  if (process.env.FANTASYLEAGUE_DEMO_ONLY === 'true') return { error: 'Modo demostración: modificaciones deshabilitadas.' };
   try {
     const user = await requireAuth();
 
@@ -323,6 +326,7 @@ export async function deleteLobby(id: string) {
 
 /** Changing a private invite invalidates all previously shared links. */
 export async function rotateLobbyInvite(lobbyId: string) {
+  if (process.env.FANTASYLEAGUE_DEMO_ONLY === 'true') return { error: 'Modo demostración: modificaciones deshabilitadas.' };
   const user = await requireAuth();
   const { data: lobby } = await admin.from('lobbies')
     .select('created_by, visibility').eq('id', lobbyId).maybeSingle();
