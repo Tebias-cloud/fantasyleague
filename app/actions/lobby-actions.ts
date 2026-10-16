@@ -223,7 +223,7 @@ export async function updateLobby(id: string, data: { name?: string; end_date?: 
     // Check ownership
     const { data: lobby, error: fetchError } = await supabaseAdmin
       .from('lobbies')
-      .select('created_by, start_date')
+      .select('created_by, start_date, end_date')
       .eq('id', id)
       .single();
 
@@ -245,14 +245,7 @@ export async function updateLobby(id: string, data: { name?: string; end_date?: 
     }
 
     if (data.end_date) {
-      const newEndDate = new Date(data.end_date);
-      if (isNaN(newEndDate.getTime())) {
-        return { error: 'Fecha de término no válida.' };
-      }
-      if (new Date(lobby.start_date) >= newEndDate) {
-        return { error: 'La fecha de término debe ser posterior a la fecha de inicio.' };
-      }
-      updates.end_date = newEndDate.toISOString();
+      return { error: 'La duración de la competición no se modifica una vez creada.' };
     }
 
     const { error } = await supabaseAdmin
