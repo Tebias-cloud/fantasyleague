@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Settings, Trash2, Calendar, Edit2, Loader2, X } from 'lucide-react';
+import { Settings, Trash2, Edit2, Loader2, X } from 'lucide-react';
 import { updateLobby, deleteLobby } from '@/app/actions/lobby-actions';
 
 interface LobbyAdminControlsProps {
@@ -29,12 +29,10 @@ export default function LobbyAdminControls({
 
   const [name, setName] = useState(initialName);
   // Extract YYYY-MM-DD from ISO string for the input
-  const [endDate, setEndDate] = useState(initialEndDate.split('T')[0]);
 
   const openEditModal = () => {
     setUpdateError(null);
     setName(initialName);
-    setEndDate(initialEndDate.split('T')[0]);
     setIsEditModalOpen(true);
   };
 
@@ -49,7 +47,7 @@ export default function LobbyAdminControls({
     setIsSubmitting(true);
     
     try {
-      const result = await updateLobby(lobbyId, { name, end_date: new Date(endDate).toISOString() });
+      const result = await updateLobby(lobbyId, { name });
       if (result.error) {
         setUpdateError(result.error);
       } else {
@@ -139,19 +137,7 @@ export default function LobbyAdminControls({
                 />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1.5">Fecha de Fin</label>
-                <div className="relative">
-                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-                  <input 
-                    required
-                    type="date" 
-                    value={endDate}
-                    onChange={e => setEndDate(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl py-3 pl-9 pr-3 text-sm text-white focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-colors [&::-webkit-calendar-picker-indicator]:invert"
-                  />
-                </div>
-              </div>
+              <p className="text-xs text-slate-400">Fin previsto: {new Date(initialEndDate).toLocaleDateString('es-ES')}. Las fechas del desafío son inmutables.</p>
 
               <div className="flex gap-3 pt-2">
                 <button 
