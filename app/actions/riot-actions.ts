@@ -15,6 +15,7 @@ const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey);
 export async function addPlayerToLobby(
   lobbyId: string, gameName: string, tagLine: string, platform: string, inviteToken?: string
 ) {
+  if (process.env.FANTASYLEAGUE_DEMO_ONLY === 'true') return { error: 'Modo demostración: inscripciones deshabilitadas.' };
   try {
     await requireAuth();
     const access = await accessLobby(lobbyId, inviteToken);
@@ -92,6 +93,7 @@ interface LobbyPlayerWithProfile {
 }
 
 export async function refreshLobbyPlayers(lobbyId: string) {
+  if (process.env.FANTASYLEAGUE_DEMO_ONLY === 'true') return { error: 'Modo demostración: actualización deshabilitada.' };
   try {
     const user = await requireAuth();
 
