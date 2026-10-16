@@ -1,6 +1,18 @@
 # LoL Fantasy League & Standings Tracker
 
-Plataforma full-stack construida con **Next.js 16 (React 19)**, **Supabase (PostgreSQL con RLS)** y la **API oficial de Riot Games**. Permite crear salas de competición personalizadas (lobbies) para monitorear, comparar y rankear la evolución de Puntos de Liga (LP) y estadísticas de invocadores en tiempo real.
+Plataforma full-stack construida con **Next.js 16 (React 19)**, **Supabase (PostgreSQL con RLS)** y la **API oficial de Riot Games**. Permite crear salas de desafío SoloQ para comparar los LP **ganados desde la inscripción**. El acceso público a datos reales permanece bloqueado hasta la aprobación de Riot.
+
+---
+## MVP para solicitud a Riot (sin datos reales públicos)
+
+- [Demo interactiva sin Riot API Key](./app/demo/page.tsx), ruta web `/demo`, con datos **ficticios** etiquetados.
+- Salas de 7, 14 o 30 días, entre 2 y 20 participantes, públicas o privadas con enlace hash.
+- Riot ID y servidor elegidos **por separado**; el `#TAG` no representa la región.
+- Clasificación por **diferencia de LP**; estadísticas de SoloQ (queue 420). El historial de cada sala se conserva en `lobby_player_snapshots`, independiente de otros torneos.
+- Datos reales solo en desarrollo local con una clave Riot vigente; las instalaciones públicas no consultan Riot antes de la aprobación.
+- [Plan de solicitud a Riot](./docs/RIOT_PRODUCTION_APPLICATION.md). Antes de presentar deben completarse dominio, contacto y páginas legales, además de aplicar las migraciones 001–008 en un Supabase dedicado.
+
+**Aún NO está terminado el lanzamiento público:** falta activar un entorno de pruebas Supabase, sincronización programada anti-abuso, verificación real con Riot Sign On cuando corresponda, completar aspectos legales y revisión móvil. No entregar esta rama como beta pública con clave de desarrollo.
 
 ---
 
