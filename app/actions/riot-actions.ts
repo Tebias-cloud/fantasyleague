@@ -53,8 +53,8 @@ export async function addPlayerToLobby(
       if (insertError.code === '23505') return { error: 'Ese jugador ya participa en esta sala.' };
       return { error: insertError.message.includes('Sala llena') ? 'Sala llena.' : 'No se pudo registrar al jugador.' };
     }
-    const { error: snapshotError } = await supabaseAdmin.from('player_snapshots').insert({
-      player_puuid: player.puuid, tier: player.tier, division: player.division,
+    const { error: snapshotError } = await supabaseAdmin.from('lobby_player_snapshots').insert({
+      lobby_id: lobbyId, player_puuid: player.puuid, tier: player.tier, division: player.division,
       lp: player.lp, total_wins: player.wins, total_losses: player.losses,
     });
     if (snapshotError) {
@@ -147,6 +147,7 @@ export async function refreshLobbyPlayers(lobbyId: string) {
           .eq('puuid', data.puuid);
 
         newSnapshots.push({
+          lobby_id: lobbyId,
           player_puuid: data.puuid,
           tier: data.tier,
           division: data.division,
@@ -167,7 +168,7 @@ export async function refreshLobbyPlayers(lobbyId: string) {
 
     if (newSnapshots.length > 0) {
       const { error: insertError } = await supabaseAdmin
-        .from('player_snapshots')
+        .from('lobby_player_snapshots')
         .insert(newSnapshots);
       
       if (insertError) throw insertError;
