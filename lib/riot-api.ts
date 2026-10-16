@@ -280,7 +280,7 @@ export async function getPlayerRecentMatches(puuid: string, platform: string = '
   const { region } = getRouteByPlatform(platform);
   try {
     // Obtener los últimos 5 IDs de partidas
-    const matchesUrl = `https://${region}.api.riotgames.com/lol/match/v5/matches/by-puuid/${puuid}/ids?start=0&count=5`;
+    const matchesUrl = `https://${region}.api.riotgames.com/lol/match/v5/matches/by-puuid/${puuid}/ids?start=0&count=5&queue=420`;
     const matchIds = await riotFetch<string[]>(matchesUrl);
 
     const matchPromises = matchIds.map(async (matchId) => {
