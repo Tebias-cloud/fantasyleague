@@ -6,7 +6,7 @@ export async function proxy(request: NextRequest) {
   // demo and legal draft pages. No Supabase session or Riot APIs are invoked.
   if (process.env.FANTASYLEAGUE_DEMO_ONLY === 'true') {
     const path = request.nextUrl.pathname;
-    if (path === '/demo' || path.startsWith('/legal/') || path === '/legal') {
+    if (path === '/demo' || path === '/riot.txt' || path.startsWith('/legal/') || path === '/legal') {
       return NextResponse.next();
     }
     const url = request.nextUrl.clone();
