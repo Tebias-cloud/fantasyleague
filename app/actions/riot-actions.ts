@@ -4,122 +4,77 @@ import { createClient } from '@supabase/supabase-js';
 import { getPlayerFullData, getPlayerRecentMatches, RiotApiError } from '@/lib/riot-api';
 import { requireAuth } from '@/lib/auth';
 import { LobbySettings } from '@/types/database.types';
+import { accessLobby } from '@/lib/lobby-access';
+import { ensureLiveRiotAllowed } from '@/lib/riot-policy';
+import { isRiotPlatform, normalizeRiotId } from '@/lib/competition';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder-service-role-key';
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey);
 
-export async function addPlayerToLobby(lobbyId: string, gameName: string, tagLine: string) {
+export async function addPlayerToLobby(
+  lobbyId: string, gameName: string, tagLine: string, platform: string, inviteToken?: string
+) {
   try {
-    const user = await requireAuth();
-
-    const trimmedGameName = (gameName || '').trim();
-    const trimmedTagLine = (tagLine || '').trim().replace(/^#/, '');
-
-    if (!trimmedGameName || !trimmedTagLine) {
-      return { error: 'Faltan campos obligatorios (Nombre o Tag).' };
-    }
-
-    if (trimmedGameName.length > 24 || trimmedTagLine.length > 8) {
-      return { error: 'Formato de Riot ID inválido (longitud no válida).' };
-    }
-
-    // 1. Check ownership and lobby settings
-    const { data: lobby, error: lobbyFetchError } = await supabaseAdmin
-      .from('lobbies')
-      .select('created_by, settings')
-      .eq('id', lobbyId)
-      .single();
-
-    if (lobbyFetchError || !lobby) {
-      return { error: 'Sala no encontrada.' };
-    }
-
-    if (!lobby.created_by || lobby.created_by !== user.id) {
-      return { error: 'Solo el creador de la sala puede añadir jugadores.' };
-    }
-
+    await requireAuth();
+    const access = await accessLobby(lobbyId, inviteToken);
+    if (!access) return { error: 'Sala privada: abre un enlace de invitación válido.' };
+    const lobby = access.lobby;
+    if (new Date(lobby.end_date).getTime() <= Date.now()) return { error: 'La competencia finalizó.' };
+    if (!isRiotPlatform(platform)) return { error: 'Selecciona el servidor real del jugador.' };
+    const identity = normalizeRiotId(gameName, tagLine);
     const settings = (lobby.settings || {}) as LobbySettings;
+    const maxPlayers = Math.min(20, settings.maxPlayers || 20);
 
-    // 2. Validate maxPlayers setting if configured
-    if (typeof settings.maxPlayers === 'number' && settings.maxPlayers > 0) {
-      const { count, error: countError } = await supabaseAdmin
-        .from('lobby_players')
-        .select('*', { count: 'exact', head: true })
-        .eq('lobby_id', lobbyId);
+    const { count } = await supabaseAdmin.from('lobby_players')
+      .select('*', { count: 'exact', head: true }).eq('lobby_id', lobbyId);
+    if ((count ?? 0) >= maxPlayers) return { error: 'La sala está llena.' };
 
-      if (!countError && typeof count === 'number' && count >= settings.maxPlayers) {
-        return { error: `La sala ha alcanzado el límite máximo de ${settings.maxPlayers} jugadores.` };
-      }
-    }
+    try { ensureLiveRiotAllowed(); }
+    catch { return { error: 'Consultas Riot desactivadas. Para pruebas reales usa una clave local válida.' }; }
+    const player = await getPlayerFullData(identity.gameName, identity.tagLine, platform);
 
-    // 3. Fetch full player data from Riot Games API
-    const player = await getPlayerFullData(trimmedGameName, trimmedTagLine);
-
-    // 4. Validate onlyUnranked setting if configured
     if (settings.onlyUnranked && player.tier !== 'UNRANKED') {
-      return { error: 'Esta sala está configurada para aceptar únicamente jugadores Unranked.' };
+      return { error: 'Esta sala solo acepta jugadores Unranked.' };
     }
-
-    // 5. Upsert en public.players
-    const { error: playersError } = await supabaseAdmin
-      .from('players')
-      .upsert([{
-        puuid: player.puuid,
-        game_name: player.game_name,
-        tag_line: player.tag_line,
-        profile_icon_id: player.profile_icon_id,
-      }]);
-
-    if (playersError) throw playersError;
-
-    // 6. Insert en public.lobby_players
-    const { error: lobbyPlayersError } = await supabaseAdmin
-      .from('lobby_players')
-      .insert([{
-        lobby_id: lobbyId,
-        player_puuid: player.puuid,
-        start_absolute_lp: player.current_absolute_lp,
-        start_wins: player.wins,
-        start_losses: player.losses,
-      }]);
-
-    if (lobbyPlayersError) {
-      if (lobbyPlayersError.code === '23505') {
-        return { error: 'El jugador ya está en esta sala.' };
-      }
-      throw lobbyPlayersError;
+    const { error: upsertError } = await supabaseAdmin.from('players').upsert({
+      puuid: player.puuid, game_name: player.game_name, tag_line: player.tag_line,
+      platform, profile_icon_id: player.profile_icon_id,
+    });
+    if (upsertError) throw upsertError;
+    const { error: insertError } = await supabaseAdmin.from('lobby_players').insert({
+      lobby_id: lobbyId, player_puuid: player.puuid,
+      start_absolute_lp: player.current_absolute_lp,
+      start_wins: player.wins, start_losses: player.losses,
+      joined_at: new Date().toISOString(), start_tier: player.tier,
+      start_division: player.division, start_lp: player.lp,
+    });
+    if (insertError) {
+      if (insertError.code === '23505') return { error: 'Ese jugador ya participa en esta sala.' };
+      return { error: insertError.message.includes('Sala llena') ? 'Sala llena.' : 'No se pudo registrar al jugador.' };
     }
-
-    // 7. Insert primer snapshot en public.player_snapshots
-    const { error: snapshotsError } = await supabaseAdmin
-      .from('player_snapshots')
-      .insert([{
-        player_puuid: player.puuid,
-        tier: player.tier,
-        division: player.division,
-        lp: player.lp,
-        total_wins: player.wins,
-        total_losses: player.losses,
-      }]);
-
-    if (snapshotsError) throw snapshotsError;
-
+    const { error: snapshotError } = await supabaseAdmin.from('player_snapshots').insert({
+      player_puuid: player.puuid, tier: player.tier, division: player.division,
+      lp: player.lp, total_wins: player.wins, total_losses: player.losses,
+    });
+    if (snapshotError) {
+      // No mostrar un jugador sin baseline/historial válido.
+      await supabaseAdmin.from('lobby_players').delete().eq('lobby_id', lobbyId).eq('player_puuid', player.puuid);
+      throw snapshotError;
+    }
     return { success: true };
   } catch (error: unknown) {
     if (error instanceof Error && error.message.startsWith('UNAUTHORIZED')) {
-      return { error: 'Debes iniciar sesión para añadir jugadores.' };
+      return { error: 'Debes iniciar sesión para unirte a la competición.' };
     }
     if (error instanceof RiotApiError) {
-      if (error.status === 404) return { error: 'Jugador no encontrado. Revisa el Nombre y el Tag.' };
-      if (error.status === 429) return { error: 'Demasiadas peticiones a Riot. Inténtalo en un momento.' };
-      if (error.status === 401 || error.status === 403) return { error: 'La API Key de Riot ha expirado o es inválida.' };
-      if (error.status === 408) return { error: 'El servidor de Riot tardó demasiado en responder.' };
-      if (error.status && error.status >= 500) return { error: 'Los servidores de Riot están fallando en este momento.' };
+      if (error.status === 404) return { error: 'Riot ID no encontrado en ese servidor. Comprueba el servidor real.' };
+      if (error.status === 429) return { error: 'Límite de Riot alcanzado. Reintenta más tarde.' };
+      if (error.status === 401 || error.status === 403) return { error: 'La clave Riot venció o no tiene permisos.' };
+      if (error.status === 408) return { error: 'Riot no respondió a tiempo.' };
     }
-    const errMsg = error instanceof Error ? error.message : 'Error desconocido';
-    console.error('Error al añadir jugador:', errMsg);
-    return { error: 'Ocurrió un error al añadir al jugador.' };
+    console.error('No se pudo añadir participante:', error);
+    return { error: 'No se pudo añadir al participante.' };
   }
 }
 
@@ -128,9 +83,11 @@ interface LobbyPlayerWithProfile {
   players: {
     game_name: string;
     tag_line: string;
+    platform: string | null;
   } | {
     game_name: string;
     tag_line: string;
+    platform: string | null;
   }[] | null;
 }
 
@@ -141,7 +98,7 @@ export async function refreshLobbyPlayers(lobbyId: string) {
     // Check ownership
     const { data: lobby, error: lobbyFetchError } = await supabaseAdmin
       .from('lobbies')
-      .select('created_by')
+      .select('created_by, end_date')
       .eq('id', lobbyId)
       .single();
 
@@ -153,9 +110,15 @@ export async function refreshLobbyPlayers(lobbyId: string) {
       return { error: 'Solo el creador de la sala puede actualizar los datos de los jugadores.' };
     }
 
+    if (Date.now() >= new Date(lobby.end_date).getTime()) {
+      return { error: 'La sala terminó: sus resultados están cerrados.' };
+    }
+    try { ensureLiveRiotAllowed(); }
+    catch { return { error: 'Riot solo está disponible localmente con clave de desarrollo o tras aprobación.' }; }
+
     const { data: lobbyPlayers, error: fetchError } = await supabaseAdmin
       .from('lobby_players')
-      .select('player_puuid, players(game_name, tag_line)')
+      .select('player_puuid, players(game_name, tag_line, platform)')
       .eq('lobby_id', lobbyId);
 
     if (fetchError || !lobbyPlayers) throw fetchError;
@@ -170,7 +133,8 @@ export async function refreshLobbyPlayers(lobbyId: string) {
       if (!p) continue;
 
       try {
-        const data = await getPlayerFullData(p.game_name, p.tag_line);
+        if (!p.platform || !isRiotPlatform(p.platform)) continue;
+        const data = await getPlayerFullData(p.game_name, p.tag_line, p.platform);
         
         // Actualizar el perfil (por si cambió el ícono o el nombre de invocador)
         await supabaseAdmin
@@ -191,7 +155,7 @@ export async function refreshLobbyPlayers(lobbyId: string) {
           total_losses: data.losses,
         });
         
-        await new Promise((res) => setTimeout(res, 150));
+        await new Promise((res) => setTimeout(res, 1400));
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : 'Error desconocido';
         console.error(`Error refrescando jugador ${p.game_name}:`, errMsg);
@@ -220,19 +184,20 @@ export async function refreshLobbyPlayers(lobbyId: string) {
   }
 }
 
-export async function getPlayerMatchesAction(puuid: string) {
+export async function getPlayerMatchesAction(puuid: string, lobbyId: string, inviteToken?: string) {
   try {
-    const { data: player } = await supabaseAdmin
-      .from('players')
-      .select('tag_line')
-      .eq('puuid', puuid)
-      .single();
-
-    const tagLine = player?.tag_line || 'LAS';
-    return await getPlayerRecentMatches(puuid, tagLine);
+    const access = await accessLobby(lobbyId, inviteToken);
+    if (!access) return [];
+    ensureLiveRiotAllowed();
+    const { data: member } = await supabaseAdmin.from('lobby_players')
+      .select('player_puuid').eq('lobby_id', lobbyId).eq('player_puuid', puuid).maybeSingle();
+    if (!member) return [];
+    const { data: player } = await supabaseAdmin.from('players')
+      .select('platform').eq('puuid', puuid).maybeSingle();
+    if (!player?.platform || !isRiotPlatform(player.platform)) return [];
+    return await getPlayerRecentMatches(puuid, player.platform);
   } catch (error: unknown) {
-    const errMsg = error instanceof Error ? error.message : 'Error desconocido';
-    console.error(`Error in getPlayerMatchesAction for ${puuid}:`, errMsg);
+    console.error('Error al consultar partidas SoloQ:', error);
     return [];
   }
 }
