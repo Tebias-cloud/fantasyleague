@@ -3,6 +3,8 @@
 import { createClient } from '@supabase/supabase-js';
 import { calculateAbsoluteLP, getPlayerFullData } from '@/lib/riot-api';
 import { requireAuth } from '@/lib/auth';
+import { admin, accessLobby, createInvite } from '@/lib/lobby-access';
+import { competitionDates, competitionDelta, parseDuration, parsePlayerLimit } from '@/lib/competition';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder-service-role-key';
@@ -11,116 +13,39 @@ const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey);
 
 export async function createLobby(formData: {
   name: string;
-  startDate: string;
-  endDate: string;
+  durationDays: number;
+  visibility: 'public' | 'private';
   onlyUnranked: boolean;
   maxPlayers: number;
-  players: string;
 }) {
-  // Gate: only authenticated users can create lobbies.
   const user = await requireAuth();
+  const name = (formData.name || '').trim();
+  if (!name || name.length > 80) throw new Error('El nombre de la sala debe tener entre 1 y 80 caracteres.');
+  const durationDays = parseDuration(formData.durationDays);
+  const maxPlayers = parsePlayerLimit(formData.maxPlayers);
+  if (!['public', 'private'].includes(formData.visibility)) throw new Error('Visibilidad inválida.');
+  const dates = competitionDates(durationDays);
+  const invite = formData.visibility === 'private' ? createInvite() : null;
 
-  const trimmedName = (formData.name || '').trim();
-  if (!trimmedName) {
-    throw new Error("El nombre de la sala es obligatorio.");
-  }
-
-  const startDate = new Date(formData.startDate);
-  const endDate = new Date(formData.endDate);
-
-  if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-    throw new Error("Fechas inválidas para la sala.");
-  }
-
-  if (startDate >= endDate) {
-    throw new Error("La fecha de inicio debe ser anterior a la fecha de término.");
-  }
-
-  // 1. Crear el lobby
-  const { data: lobbyData, error: lobbyError } = await supabaseAdmin
+  // Creation must succeed without Riot credentials: participants are added later.
+  const { data, error } = await admin
     .from('lobbies')
-    .insert([
-      {
-        name: trimmedName,
-        start_date: startDate.toISOString(),
-        end_date: endDate.toISOString(),
-        settings: {
-          onlyUnranked: Boolean(formData.onlyUnranked),
-          maxPlayers: Number(formData.maxPlayers) || 10,
-        },
-        active: true,
-        created_by: user.id,
-      }
-    ])
-    .select('id')
-    .single();
-
-  if (lobbyError || !lobbyData) {
-    console.error("Error creating lobby:", lobbyError);
-    throw new Error("No se pudo crear la sala.");
+    .insert({
+      name,
+      start_date: dates.startDate,
+      end_date: dates.endDate,
+      active: true,
+      created_by: user.id,
+      visibility: formData.visibility,
+      invite_token_hash: invite?.hash || null,
+      settings: { onlyUnranked: !!formData.onlyUnranked, maxPlayers, durationDays, queueId: 420, noPrizes: true },
+    })
+    .select('id').single();
+  if (error || !data) {
+    console.error('Error creating lobby:', error);
+    throw new Error('No se pudo crear la sala. Comprueba la migración 007.');
   }
-
-  const lobbyId = lobbyData.id;
-
-  // 2. Procesar jugadores
-  const playerLines = formData.players
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line.length > 0);
-
-  const validPlayerLines = playerLines.filter(line => line.includes('#'));
-
-  if (playerLines.length > 0 && validPlayerLines.length === 0) {
-    throw new Error("Debes incluir el #TAG de Riot para cada jugador (ej: Nombre#TAG)");
-  }
-
-  for (const line of validPlayerLines) {
-    const [gameName, tagLine] = line.split('#');
-    if (!gameName || !tagLine) continue;
-
-    try {
-      const riotData = await getPlayerFullData(gameName.trim(), tagLine.trim().replace(/^#/, ''));
-      
-      // UPSERT en players table
-      await supabaseAdmin
-        .from('players')
-        .upsert({
-          puuid: riotData.puuid,
-          game_name: riotData.game_name,
-          tag_line: riotData.tag_line,
-          profile_icon_id: riotData.profile_icon_id,
-        });
-
-      // Insert en lobby_players
-      await supabaseAdmin
-        .from('lobby_players')
-        .insert({
-          lobby_id: lobbyId,
-          player_puuid: riotData.puuid,
-          start_absolute_lp: riotData.current_absolute_lp,
-          start_wins: riotData.wins,
-          start_losses: riotData.losses,
-        });
-
-      // Insert initial snapshot
-      await supabaseAdmin
-        .from('player_snapshots')
-        .insert({
-          player_puuid: riotData.puuid,
-          tier: riotData.tier,
-          division: riotData.division,
-          lp: riotData.lp,
-          total_wins: riotData.wins,
-          total_losses: riotData.losses,
-        });
-        
-    } catch (error: unknown) {
-      const errMsg = error instanceof Error ? error.message : 'Error procesando jugador';
-      console.error(`Error processing player ${line}:`, errMsg);
-    }
-  }
-
-  return lobbyId;
+  return { id: data.id as string, inviteToken: invite?.token || null };
 }
 
 interface RawSnapshot {
@@ -142,16 +67,20 @@ interface RawPlayer {
 
 interface RawLobbyPlayerRow {
   start_absolute_lp: number;
+  joined_at: string | null;
   start_wins: number;
   start_losses: number;
   player: RawPlayer | RawPlayer[] | null;
 }
 
-export async function getLobbyPlayers(lobbyId: string) {
-  const { data, error } = await supabaseAdmin
+export async function getLobbyPlayers(lobbyId: string, inviteToken?: string) {
+  const access = await accessLobby(lobbyId, inviteToken);
+  if (!access) throw new Error('Sala privada o no encontrada.');
+  const { data, error } = await admin
     .from('lobby_players')
     .select(`
       start_absolute_lp,
+      joined_at,
       start_wins,
       start_losses,
       player:players (
@@ -200,7 +129,9 @@ export async function getLobbyPlayers(lobbyId: string) {
       };
     }
 
-    const snapshots = (player.player_snapshots || []).slice().sort((a, b) => 
+    const snapshots = (player.player_snapshots || [])
+      .filter(snap => new Date(snap.created_at).getTime() >= new Date(row.joined_at || access.lobby.start_date).getTime())
+      .slice().sort((a, b) => 
       new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
     );
 
@@ -213,7 +144,7 @@ export async function getLobbyPlayers(lobbyId: string) {
     const currentLosses = latestSnapshot?.total_losses ?? row.start_losses;
 
     const currentAbsoluteLp = calculateAbsoluteLP(currentTier, currentDivision, currentLp);
-    const delta = currentAbsoluteLp - row.start_absolute_lp;
+    const delta = competitionDelta(currentAbsoluteLp, row.start_absolute_lp);
     
     const totalGames = currentWins + currentLosses;
     const winrate = totalGames > 0 ? Math.round((currentWins / totalGames) * 100) : 0;
@@ -255,6 +186,7 @@ export async function getLobbyPlayers(lobbyId: string) {
 export async function getRecentLobbies() {
   const { data, error } = await supabaseAdmin
     .from('lobbies')
+    .eq('visibility', 'public')
     .select('id, name, start_date, end_date, active')
     .eq('active', true)
     .order('start_date', { ascending: false })
@@ -271,6 +203,7 @@ export async function getRecentLobbies() {
 export async function getAllLobbies() {
   const { data, error } = await supabaseAdmin
     .from('lobbies')
+    .eq('visibility', 'public')
     .select('id, name, start_date, end_date, active')
     .order('start_date', { ascending: false })
     .limit(50);
